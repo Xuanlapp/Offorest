@@ -1,7 +1,9 @@
 import { app, BrowserWindow, dialog } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { autoUpdater } from 'electron-updater';
+import electronUpdaterPkg from 'electron-updater';
+
+const { autoUpdater } = electronUpdaterPkg;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

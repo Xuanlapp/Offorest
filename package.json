@@ -1,7 +1,7 @@
 {
   "name": "offorest",
   "private": true,
-  "version": "0.1.7",
+  "version": "0.1.8",
   "type": "module",
   "main": "main.js",
   "description": "Offorest - Ứng dụng quản lý và tạo sticker cho các sản phẩm của Offorest",
@@ -48,6 +48,7 @@
   "build": {
     "appId": "com.offorest.desktop",
     "productName": "Offorest V1",
+    "artifactName": "Offorest-V1-Setup-${version}.${ext}",
     "directories": {
       "output": "release"
     },
