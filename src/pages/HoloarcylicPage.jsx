@@ -8,6 +8,7 @@ import ImagePreviewEditorModal from '../components/ImagePreviewEditorModal'
 
 export default function HoloarcylicPage() {
   const [isLoading, setIsLoading] = useState(false)
+  
   const [progress, setProgress] = useState(0)
   const [error, setError] = useState('')
   const [data, setData] = useState([])
