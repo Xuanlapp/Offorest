@@ -927,7 +927,7 @@ export default function ComboStickerPage() {
                     disabled={uploading}
                   >
                     {uploading ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <CloudUpload className="h-3.5 w-3.5" />}
-                    Upload to Drive & Sheet
+                    Upload to Drive
                   </button>
                 </div>
               </div>

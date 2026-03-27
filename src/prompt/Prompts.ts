@@ -61,13 +61,19 @@ STEP 3 – Extract Objects
 List all distinct objects found in the image (e.g. separate stickers on the sheet).
 
 🧾 OUTPUT FORMAT
-Return ONLY valid JSON. Do not include markdown formatting (like json). Use this schema:
+Return ONLY valid JSON. Do not include markdown formatting.
+
 {
   "theme": "string",
-  "style": "string", // The prompt composed in Step 2
-  "objects": ["string", "string", ...],
+  "style": "string",
+  "objects": ["string", "... total 30 items"],
   "colorPalette": ["string", "string", ...]
-}`,
+}
+
+⚠️ STRICT RULES
+- The "objects" array MUST contain EXACTLY 30 items (no more, no less).
+- If fewer objects are found in the image, you MUST generate additional ones that fit the theme.
+- Output must be valid JSON only.`,
 
 
 combostickerGenerate: `DESIGN REQUIREMENTS:- A single, complete illustration.  - Centered and fully visible. - ONLY ONE OUTLINE: THICK WHITE OUTLINE (Sticker Die-Cut). - NO black outline.- NO double outline.- NO shadow border.- NO stroke outside the white outline.- White outline must be smooth, even thickness, and clean vector edge.- Surround the entire sticker shape clearly.STYLE & VISUAL:- Vector-style illustration.- Bold, clean shapes.- High contrast colors.- Smooth curves.- Crisp edges.- Cute / trendy / expressive.- Print-ready quality (No blur, no noise).STRICTLY AVOID:- Black outline.- Dark stroke outside the sticker.- Glow effects.- Drop shadows.- Background elements.- Text / Watermarks.TECHNICAL REQUIREMENT:- Generate on a SOLID BLACK BACKGROUND (HEX #000000).- The white outline must contrast clearly against the black background for automatic removal.- Do NOT generate a checkerboard or transparent background. Use PURE BLACK.SAFETY & COPYRIGHT RULES:- DO NOT generate any trademarked logos, characters, brand names, or copyrighted imagery.- Create original artwork`,

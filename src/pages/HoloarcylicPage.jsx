@@ -8,7 +8,7 @@ import ImagePreviewEditorModal from '../components/ImagePreviewEditorModal'
 
 export default function HoloarcylicPage() {
   const [isLoading, setIsLoading] = useState(false)
-  
+
   const [progress, setProgress] = useState(0)
   const [error, setError] = useState('')
   const [data, setData] = useState([])
@@ -24,7 +24,6 @@ export default function HoloarcylicPage() {
   const [uploadStatus, setUploadStatus] = useState({})
   const [lifestyleResults, setLifestyleResults] = useState({})
   const [editorState, setEditorState] = useState(null)
-
   const productNames = useMemo(() => {
     const uniqueProducts = new Set(
       data
