@@ -1,0 +1,122 @@
+{
+  "info": {
+    "name": "Offorest Image Upload API",
+    "description": "Test collection for uploading images to Google Drive and Sheets via WordPress backend",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Upload Images to Google Drive & Sheets",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer YOUR_WORDPRESS_JWT_TOKEN_HERE",
+            "description": "WordPress JWT token from login"
+          }
+        ],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "file_0",
+              "type": "file",
+              "src": [],
+              "description": "First image file to upload"
+            },
+            {
+              "key": "file_1",
+              "type": "file",
+              "src": [],
+              "description": "Second image file (optional)"
+            },
+            {
+              "key": "keyword",
+              "value": "combo sticker test",
+              "description": "Keyword for the upload batch"
+            },
+            {
+              "key": "sheetId",
+              "value": "1YIDqRTN1RcKecmpc8fbnYdZrBee3CqqjfrlQ_yjOpFQ",
+              "description": "Google Sheets ID"
+            },
+            {
+              "key": "gid",
+              "value": "999897633",
+              "description": "Google Sheets tab ID (optional)"
+            }
+          ]
+        },
+        "url": {
+          "raw": "http://offorest-wp.lap/wp-json/offorest-api/v1/google/upload",
+          "protocol": "http",
+          "host": [
+            "offorest-wp",
+            "lap"
+          ],
+          "path": [
+            "wp-json",
+            "offorest-api",
+            "v1",
+            "google",
+            "upload"
+          ]
+        },
+        "description": "Upload multiple images to Google Drive and update Google Sheets with metadata"
+      },
+      "response": []
+    },
+    {
+      "name": "Test Backend Connection",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer YOUR_WORDPRESS_JWT_TOKEN_HERE",
+            "description": "WordPress JWT token from login"
+          }
+        ],
+        "url": {
+          "raw": "http://offorest-wp.lap/wp-json/offorest-api/v1/test-connection",
+          "protocol": "http",
+          "host": [
+            "offorest-wp",
+            "lap"
+          ],
+          "path": [
+            "wp-json",
+            "offorest-api",
+            "v1",
+            "test-connection"
+          ]
+        },
+        "description": "Test connection to backend API"
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://offorest-wp.lap/wp-json/offorest-api/v1",
+      "type": "string"
+    },
+    {
+      "key": "wp_token",
+      "value": "YOUR_WORDPRESS_JWT_TOKEN_HERE",
+      "type": "string"
+    },
+    {
+      "key": "google_token",
+      "value": "YOUR_GOOGLE_ACCESS_TOKEN_HERE",
+      "type": "string"
+    },
+    {
+      "key": "sheet_id",
+      "value": "1YIDqRTN1RcKecmpc8fbnYdZrBee3CqqjfrlQ_yjOpFQ",
+      "type": "string"
+    }
+  ]
+}
