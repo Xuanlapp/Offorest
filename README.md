@@ -25,6 +25,29 @@ npm install
 npm run dev
 ```
 
+### Desktop Build
+
+Windows build on Windows:
+
+```bash
+npm run dist:win
+```
+
+macOS build must run on a Mac or on GitHub Actions macOS runner:
+
+```bash
+npm run dist:mac
+```
+
+Output files are written to `release/`.
+
+### Run On macOS
+
+- The app can run on macOS as a packaged Electron app.
+- Because the current build is unsigned, macOS may block the first launch.
+- On the Mac machine, open it with `Right click > Open > Open` the first time.
+- If you want double-click install/open without Apple security warnings, you need Apple Developer signing and notarization.
+
 ### Authentication Setup
 
 The app uses the access token from your WordPress login automatically. No additional JWT token setup is required.

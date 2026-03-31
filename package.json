@@ -1,7 +1,7 @@
 {
   "name": "offorest",
   "private": true,
-  "version": "0.1.8",
+  "version": "0.1.13",
   "type": "module",
   "main": "main.js",
   "description": "Offorest - Ứng dụng quản lý và tạo sticker cho các sản phẩm của Offorest",
@@ -15,6 +15,8 @@
     "electron:dev": "wait-on http://localhost:5173 && electron .",
     "start": "concurrently \"npm run dev\" \"npm run electron:dev\"",
     "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win nsis",
+    "dist:mac": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false npm run build && electron-builder --mac dmg zip",
     "release:patch": "npm version patch --no-git-tag-version && npm run dist"
   },
   "dependencies": {
@@ -47,8 +49,7 @@
   },
   "build": {
     "appId": "com.offorest.desktop",
-    "productName": "Offorest V1",
-    "artifactName": "Offorest-V1-Setup-${version}.${ext}",
+    "productName": "Offorest",
     "directories": {
       "output": "release"
     },
@@ -61,14 +62,12 @@
       "target": "nsis",
       "signAndEditExecutable": false
     },
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "Xuanlapp",
-        "repo": "Offorest",
-        "private": false,
-        "releaseType": "release"
-      }
-    ]
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["x64", "arm64"] },
+        { "target": "zip", "arch": ["x64", "arm64"] }
+      ],
+      "category": "public.app-category.productivity"
+    }
   }
 }

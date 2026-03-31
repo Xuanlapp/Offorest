@@ -114,12 +114,7 @@ export const getCurrentUser = () => {
 
   return {
     ...user,
-    permissions:
-      user.permissions?.length
-        ? user.permissions
-        : productPermissions.length
-          ? productPermissions
-          : ROLE_PERMISSIONS[user.role] || [],
+    permissions: productPermissions,
   }
 }
 
@@ -127,6 +122,12 @@ export const getDefaultPathForUser = (user) => {
   if (!user) return '/login'
 
   const products = Array.isArray(user?.products) ? user.products : []
+  const productPermissions = buildPermissionsFromProducts(products)
+
+  if (!products.length || !productPermissions.length) {
+    return '/no-permission'
+  }
+
   if (products.length > 0) {
     const firstProductCode = normalizeProductCode(products[0]?.code || '')
     const firstProductPath = PRODUCT_PATH_MAP[firstProductCode]
@@ -136,14 +137,6 @@ export const getDefaultPathForUser = (user) => {
     }
 
     return '/no-permission'
-  }
-
-  const firstAccessibleMode = Object.values(APP_MODES).find((mode) =>
-    hasPermission(user, mode.permissions || [])
-  )
-
-  if (firstAccessibleMode?.path) {
-    return firstAccessibleMode.path
   }
 
   return '/no-permission'

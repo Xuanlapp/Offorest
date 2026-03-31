@@ -70,14 +70,12 @@ const callBackend = async (endpoint, payload) => {
   return data
 }
 
-//xài xong xóa callLocalBackend
 
 const callLocalBackend = async (endpoint, payload) => {
   let response
   const normalizedEndpoint = String(endpoint || '').replace(/^\/+/, '')
   const url = new URL(normalizedEndpoint, `${LOCAL_BACKEND_URL}/`).toString()
   const headers = getAuthHeaders()
-
 
  
   try {
@@ -118,6 +116,7 @@ const callLocalBackend = async (endpoint, payload) => {
     })
     throw new Error(data?.message || data?.error?.message || `API lỗi: ${response.status}`)
   }
+
   return data
 }
 
@@ -365,7 +364,6 @@ const buildUserPayload = () => {
  * @returns {Promise<{base64: string, mimeType: string}>}
  */
 export const redesignImage = async (imageUrl, _apiKey, prompt) => {
-  const { userId } = buildUserPayload()
 
   if (!imageUrl) throw new Error('Không có ảnh nguồn.')
   if (!prompt) throw new Error('Không có prompt redesign.')
@@ -375,7 +373,6 @@ export const redesignImage = async (imageUrl, _apiKey, prompt) => {
 
   // Build đúng format Gemini API
   const payload = {
-    user_id: userId,
     contents: [
       {
         role: 'user',
@@ -400,10 +397,9 @@ export const redesignImage = async (imageUrl, _apiKey, prompt) => {
       },
     },
   }
-
-  const headers = getAuthHeaders()
-
-  const data = await callBackend('/gemini/ornament', payload)
+   console.log('lapday ', prompt)
+ // const headers = getAuthHeaders()
+  const data = await callBackend('/vertex/ornament', payload)
 
   const extracted = extractImageResult(data)
   if (!extracted?.base64) {
@@ -414,6 +410,77 @@ export const redesignImage = async (imageUrl, _apiKey, prompt) => {
   return {
     base64: extracted.base64,
     mimeType: extracted.mimeType,
+  }
+}
+
+export const createStickerMaster = async ({ file = null, imageUrl = '', prompt = '' }) => {
+  if (!prompt) throw new Error('Không có prompt tạo Sticker Master.')
+
+
+  const payload = {
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          {
+            inlineData: {
+              mimeType,
+              data: base64,
+            },
+          },
+          {
+            text : prompt,
+          },
+        ],
+      },
+    ],
+    generationConfig: {
+      responseModalities: ['IMAGE', 'TEXT'],
+      imageConfig: {
+        aspectRatio: '1:1',
+        image_size: '1K',
+      },
+    },
+  }
+
+  const data = await callBackend('/vertex/ornament', payload)
+  const extracted = extractImageResult(data)
+
+  if (!extracted?.base64) {
+    console.error('❌ [geminiService] Sticker master response missing base64:', data)
+    throw new Error('Backend không trả về ảnh base64 hợp lệ cho Sticker Master.')
+  }
+
+  return {
+    base64: extracted.base64,
+    mimeType: extracted.mimeType || 'image/png',
+  }
+}
+
+export const analyzeStickerImage = async ({ file = null, imageUrl = '', prompt = '' }) => {
+  if (!prompt) throw new Error('Không có prompt để analyze Sticker.')
+
+  const { base64 } = await sourceImageToBase64({ file, imageUrl })
+
+  const payload = {
+   "inlineData": {
+    "mimeType": "image/jpeg",
+    "data":  base64
+  },
+    "text": prompt,
+  }
+
+  const data = await callBackend('/vertex/sticker/analyze', payload)
+
+  const extracted = extractImageResult(data)
+  if (!extracted?.base64) {
+    console.error('❌ [geminiService] Sticker analyze response missing base64:', data)
+    throw new Error('Backend không trả về ảnh base64 hợp lệ cho Sticker Analyze.')
+  }
+
+  return {
+    base64: extracted.base64,
+    mimeType: extracted.mimeType || 'image/png',
   }
 }
 
@@ -452,7 +519,7 @@ export const analyzeComboImage = async ({ file = null, imageUrl = '', targetOutp
       responseModalities: ['TEXT'],
     },
   }
-  const data = await callBackend('/gemini/combosticker/analyze', payload)
+  const data = await callBackend('/vertex/combosticker/analyze', payload)
   const analysis = extractStructuredData(data)
 
   if (!analysis?.objects || !Array.isArray(analysis.objects)) {
@@ -529,7 +596,7 @@ export const generateComboStickerImage = async ({
   }
 
 
-  const data = await callBackend('/gemini/combosticker/generate', payload)
+  const data = await callBackend('/vertex/combosticker/generate', payload)
   const extracted = extractImageResult(data)
 
   if (!extracted?.base64) {
@@ -611,13 +678,12 @@ export const generateLifestyleImage = async ({ file = null, imageUrl = '', keywo
 
   // ── STEP 1: Analyze image → nhận insights ──
   const analyzePayload = {
-    user_id: userId,
     inlineData: { mimeType, data: base64 },
     analysis_prompt: PROMPTS.lifestyleAnalyze,
     analysis_count: 3,
   }
 
-  const analyzeData = await callBackend('/gemini/lifestyle/analyze', analyzePayload)
+  const analyzeData = await callBackend('/vertex/lifestyle/analyze', analyzePayload)
   const analyses = extractAnalysesFromResponse(analyzeData)
 
 
@@ -638,7 +704,7 @@ export const generateLifestyleImage = async ({ file = null, imageUrl = '', keywo
         mockup_prompt: generatePrompt,
       }
 
-      const genData = await callBackend('/gemini/lifestyle/generate', genPayload)
+      const genData = await callBackend('/vertex/lifestyle/generate', genPayload)
       const extracted = extractLifestyleResult(genData)
 
       return {
