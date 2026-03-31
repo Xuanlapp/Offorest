@@ -34,6 +34,7 @@ export default function Navbar({ user }) {
   const [comboStickerSheetUrl, setComboStickerSheetUrl] = useState('')
   const [holoarcylicSheetUrl, setHoloarcylicSheetUrl] = useState('')
   const [suncatcherSheetUrl, setSuncatcherSheetUrl] = useState('')
+  const [stickerSheetUrl, setStickerSheetUrl] = useState('')
 
   useEffect(() => {
     const saved = localStorage.getItem('googleDriveAccessToken')
@@ -57,6 +58,10 @@ export default function Navbar({ user }) {
     // Suncatcher
     const savedSuncatcherUrl = localStorage.getItem('suncatcherSheetUrl') || localStorage.getItem('ornamentSheetUrl')
     if (savedSuncatcherUrl) setSuncatcherSheetUrl(savedSuncatcherUrl)
+
+    // Sticker
+    const savedStickerUrl = localStorage.getItem('stickerSheetUrl')
+    if (savedStickerUrl) setStickerSheetUrl(savedStickerUrl)
   }, [])
 
   const handleAccessTokenChange = (value) => {
@@ -89,6 +94,11 @@ export default function Navbar({ user }) {
     localStorage.setItem('suncatcherSheetUrl', value)
   }
 
+  const handleStickerSheetUrlChange = (value) => {
+    setStickerSheetUrl(value)
+    localStorage.setItem('stickerSheetUrl', value)
+  }
+
   const handleTestAuth = async () => {
     try {
       const result = await testBackendConnection()
@@ -112,6 +122,7 @@ export default function Navbar({ user }) {
   const isComboStickerPage = location.pathname === '/combosticker'
   const isHoloarcylicPage = location.pathname === '/holoarcylic'
   const isSuncatcherPage = location.pathname === '/suncatcher'
+  const isStickerPage = location.pathname === '/sticker'
 
   return (
     <header className="w-full bg-zinc-900 px-4 py-4 flex justify-center z-20 border-b border-zinc-800">
@@ -161,7 +172,7 @@ export default function Navbar({ user }) {
           </div>
 
           {/* Google Sheet URL - Page-specific inputs */}
-          {(isComboStickerPage || isHoloarcylicPage || isSuncatcherPage) && (
+          {(isComboStickerPage || isHoloarcylicPage || isSuncatcherPage || isStickerPage) && (
             <div className="flex items-center gap-2">
               <span className="text-sm text-zinc-400">Sheet URL:</span>
               <div className="flex gap-1">
@@ -169,11 +180,12 @@ export default function Navbar({ user }) {
                   type="text"
                   placeholder="https://docs.google.com/spreadsheets/d/..."
                   className="px-3 py-1.5 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-white placeholder-zinc-500 focus:border-indigo-400 focus:outline-none w-80"
-                  value={isComboStickerPage ? comboStickerSheetUrl : isHoloarcylicPage ? holoarcylicSheetUrl : suncatcherSheetUrl}
+                  value={isComboStickerPage ? comboStickerSheetUrl : isHoloarcylicPage ? holoarcylicSheetUrl : isSuncatcherPage ? suncatcherSheetUrl : stickerSheetUrl}
                   onChange={(e) => {
                     if (isComboStickerPage) handleComboStickerSheetUrlChange(e.target.value)
                     else if (isHoloarcylicPage) handleHoloarcylicSheetUrlChange(e.target.value)
                     else if (isSuncatcherPage) handleSuncatcherSheetUrlChange(e.target.value)
+                    else if (isStickerPage) handleStickerSheetUrlChange(e.target.value)
                   }}
                 />
                 <button
@@ -186,6 +198,10 @@ export default function Navbar({ user }) {
                     }
                     if (isSuncatcherPage) {
                       window.dispatchEvent(new Event('suncatcherGetData'))
+                      return
+                    }
+                    if (isStickerPage) {
+                      window.dispatchEvent(new Event('stickerGetData'))
                       return
                     }
 
@@ -225,13 +241,13 @@ export default function Navbar({ user }) {
                     alert(message)
                   }}
                   className={`px-2 py-1.5 rounded-lg text-white text-sm font-semibold transition ${
-                    isHoloarcylicPage || isSuncatcherPage
+                    isHoloarcylicPage || isSuncatcherPage || isStickerPage
                       ? 'bg-blue-500 hover:bg-blue-600'
                       : 'bg-green-500 hover:bg-green-600'
                   }`}
-                  title={isHoloarcylicPage || isSuncatcherPage ? 'Tải dữ liệu từ sheet' : 'Kiểm tra URL'}
+                  title={isHoloarcylicPage || isSuncatcherPage || isStickerPage ? 'Tải dữ liệu từ sheet' : 'Kiểm tra URL'}
                 >
-                  {isHoloarcylicPage || isSuncatcherPage ? 'Get Data' : '✓'}
+                  {isHoloarcylicPage || isSuncatcherPage || isStickerPage ? 'Get Data' : '✓'}
                 </button>
               </div>
             </div>

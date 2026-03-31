@@ -346,6 +346,8 @@ export default function HoloarcylicPage() {
         .filter((row) => {
           const statusValue = getValueByAliases(row, ['TRẠNG THÁI', 'Status']);
           if (statusValue) return false;
+          const redesignValue = getValueByAliases(row, ['REDESIGN', 'REDESIGN']);
+          if (redesignValue) return false;
           const sanPham = getValueByAliases(row, ['SẢN PHẨM']);
           if (sanPham && normalizeHeader(sanPham) === 'suncatcher') return false;
           return true;

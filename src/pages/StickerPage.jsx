@@ -10,11 +10,14 @@ export default function StickerPage() {
 	const [isLoading, setIsLoading] = useState(false)
 	const [progress, setProgress] = useState(0)
 	const [error, setError] = useState('')
+	const [sheetUrl, setSheetUrl] = useState(() => localStorage.getItem('stickerSheetUrl') || '')
 	const [data, setData] = useState([])
 	const [pageSize, setPageSize] = useState(10)
 	const [currentPage, setCurrentPage] = useState(1)
 	const [masterResults, setMasterResults] = useState({})
 	const [uploadStatus, setUploadStatus] = useState({})
+	const [selectedItems, setSelectedItems] = useState({})
+	const [isBatchUploading, setIsBatchUploading] = useState(false)
 	const [editorState, setEditorState] = useState(null)
 
 	const totalPages = Math.max(1, Math.ceil(data.length / pageSize))
@@ -33,6 +36,42 @@ export default function StickerPage() {
 		() => data.slice((currentPage - 1) * pageSize, currentPage * pageSize),
 		[data, currentPage, pageSize]
 	)
+
+	const selectedCount = useMemo(
+		() => Object.values(selectedItems).filter(Boolean).length,
+		[selectedItems]
+	)
+
+	const currentPageReadyCount = useMemo(() => {
+		return paginatedData.filter((_, idx) => {
+			const globalIndex = (currentPage - 1) * pageSize + idx
+			return !!masterResults[globalIndex]?.base64
+		}).length
+	}, [paginatedData, currentPage, pageSize, masterResults])
+
+	const selectedReadyCount = useMemo(() => {
+		return Object.keys(selectedItems).filter((index) => {
+			if (!selectedItems[index]) return false
+			return !!masterResults[Number(index)]?.base64
+		}).length
+	}, [selectedItems, masterResults])
+
+	useEffect(() => {
+		setSelectedItems((prev) => {
+			let changed = false
+			const next = { ...prev }
+
+			Object.keys(next).forEach((index) => {
+				if (!next[index]) return
+				if (!masterResults[Number(index)]?.base64) {
+					next[index] = false
+					changed = true
+				}
+			})
+
+			return changed ? next : prev
+		})
+	}, [masterResults])
 
 	const normalizeHeader = (text) =>
 		String(text || '')
@@ -120,13 +159,22 @@ export default function StickerPage() {
 		let interval
 
 		try {
-			let sheetUrl = localStorage.getItem('stickerSheetUrl')
+			let effectiveSheetUrl = String(sheetUrl || '').trim()
 
-			if (!sheetUrl) {
-				sheetUrl = await getSheetUrlForPage('sticker')
+			if (!effectiveSheetUrl) {
+				effectiveSheetUrl = localStorage.getItem('stickerSheetUrl') || ''
 			}
 
-			const { id: sheetId, gid } = extractSheetInfo(sheetUrl)
+			if (!effectiveSheetUrl) {
+				effectiveSheetUrl = await getSheetUrlForPage('sticker')
+			}
+
+			if (effectiveSheetUrl) {
+				setSheetUrl(effectiveSheetUrl)
+				localStorage.setItem('stickerSheetUrl', effectiveSheetUrl)
+			}
+
+			const { id: sheetId, gid } = extractSheetInfo(effectiveSheetUrl)
 
 			if (!sheetId) {
 				setError('Link sheet từ config không hợp lệ')
@@ -140,6 +188,7 @@ export default function StickerPage() {
 			setCurrentPage(1)
 			setMasterResults({})
 			setUploadStatus({})
+			setSelectedItems({})
 
 			interval = setInterval(() => {
 				setProgress((prev) => Math.min(prev + 10, 90))
@@ -163,9 +212,11 @@ export default function StickerPage() {
 				status: getValueByAliases(row, ['Status', 'TRẠNG THÁI', 'TRANG THAI']),
 			}))
 
+			const pendingRows = normalizedRows.filter((row) => !String(row?.redesign || '').trim())
+
 			clearInterval(interval)
 			setProgress(100)
-			setData(normalizedRows)
+			setData(pendingRows)
 		} catch (err) {
 			if (interval) clearInterval(interval)
 			setError(err.message || 'Không thể lấy dữ liệu từ sheet')
@@ -173,6 +224,70 @@ export default function StickerPage() {
 			setIsLoading(false)
 			setProgress(0)
 		}
+	}
+
+	const resolveStickerSheetTarget = async () => {
+		let currentSheetUrl = String(sheetUrl || '').trim()
+
+		if (!currentSheetUrl) {
+			currentSheetUrl = localStorage.getItem('stickerSheetUrl') || ''
+		}
+
+		if (!currentSheetUrl) {
+			currentSheetUrl = await getSheetUrlForPage('sticker')
+		}
+
+		if (currentSheetUrl) {
+			setSheetUrl(currentSheetUrl)
+			localStorage.setItem('stickerSheetUrl', currentSheetUrl)
+		}
+
+		const { id: sheetId, gid } = extractSheetInfo(currentSheetUrl)
+		if (!sheetId) {
+			throw new Error('Sheet URL không hợp lệ')
+		}
+
+		return { sheetId, gid }
+	}
+
+	const uploadMasterRecord = async (globalIndex, row, target) => {
+		const result = masterResults[globalIndex]
+		if (!result?.base64) {
+			throw new Error('Chưa có ảnh master để update vào sheet')
+		}
+
+		const stt = row?.stt ?? globalIndex + 1
+		const outputDataUrl = `data:${result.mimeType || 'image/png'};base64,${result.base64}`
+		const masterFile = await dataUrlToFile(
+			outputDataUrl,
+			`sticker-master-${stt}.png`,
+			result.mimeType || 'image/png'
+		)
+
+		await updateRecordInSheet(target.sheetId, stt, target.gid, [masterFile], 'sticker')
+	}
+
+	const toggleSelectItem = (globalIndex, canSelect) => {
+		if (!canSelect) return
+		setSelectedItems((prev) => ({
+			...prev,
+			[globalIndex]: !prev[globalIndex],
+		}))
+	}
+
+	const selectAllCurrentPage = () => {
+		setSelectedItems((prev) => {
+			const next = { ...prev }
+			paginatedData.forEach((_, idx) => {
+				const globalIndex = (currentPage - 1) * pageSize + idx
+				next[globalIndex] = !!masterResults[globalIndex]?.base64
+			})
+			return next
+		})
+	}
+
+	const clearSelection = () => {
+		setSelectedItems({})
 	}
 
 	const handleUploadSingle = async (globalIndex, row) => {
@@ -188,26 +303,8 @@ export default function StickerPage() {
 		}))
 
 		try {
-			let sheetUrl = localStorage.getItem('stickerSheetUrl')
-
-			if (!sheetUrl) {
-				sheetUrl = await getSheetUrlForPage('sticker')
-			}
-
-			const { id: sheetId, gid } = extractSheetInfo(sheetUrl)
-			if (!sheetId) {
-				throw new Error('Sheet URL không hợp lệ')
-			}
-
-			const stt = row?.stt ?? globalIndex + 1
-			const outputDataUrl = `data:${result.mimeType || 'image/png'};base64,${result.base64}`
-			const masterFile = await dataUrlToFile(
-				outputDataUrl,
-				`sticker-master-${stt}.png`,
-				result.mimeType || 'image/png'
-			)
-
-			await updateRecordInSheet(sheetId, stt, gid, [masterFile], 'sticker')
+			const target = await resolveStickerSheetTarget()
+			await uploadMasterRecord(globalIndex, row, target)
 
 			setUploadStatus((prev) => ({
 				...prev,
@@ -219,6 +316,80 @@ export default function StickerPage() {
 				[globalIndex]: 'error',
 			}))
 			alert(`Update sheet lỗi: ${err.message || 'Không thể update ảnh vào sheet'}`)
+		}
+	}
+
+	const handleUploadSelected = async () => {
+		const selectedIndices = Object.keys(selectedItems)
+			.filter((index) => selectedItems[index])
+			.map((index) => Number(index))
+
+		if (!selectedIndices.length) {
+			alert('Vui lòng chọn ít nhất 1 ảnh để update')
+			return
+		}
+
+		const validIndices = selectedIndices.filter((index) => masterResults[index]?.base64)
+		if (!validIndices.length) {
+			alert('Các item đã chọn chưa có ảnh master')
+			return
+		}
+
+		setIsBatchUploading(true)
+		try {
+			const target = await resolveStickerSheetTarget()
+			let successCount = 0
+			let failedCount = 0
+			const failedDetails = []
+
+			for (const index of validIndices) {
+				const row = data[index]
+				if (!row) {
+					failedCount += 1
+					failedDetails.push(`Item ${index + 1}: Không tìm thấy dữ liệu dòng`) 
+					setUploadStatus((prev) => ({
+						...prev,
+						[index]: 'error',
+					}))
+					continue
+				}
+
+				setUploadStatus((prev) => ({
+					...prev,
+					[index]: 'uploading',
+				}))
+
+				try {
+					await uploadMasterRecord(index, row, target)
+					successCount += 1
+					setUploadStatus((prev) => ({
+						...prev,
+						[index]: 'done',
+					}))
+				} catch (itemError) {
+					failedCount += 1
+					failedDetails.push(
+						`STT ${row?.stt || index + 1}: ${itemError?.message || 'Lỗi không xác định'}`
+					)
+					setUploadStatus((prev) => ({
+						...prev,
+						[index]: 'error',
+					}))
+				}
+			}
+
+			if (failedCount > 0) {
+				alert(
+					`Update sheet xong: ${successCount} thành công, ${failedCount} lỗi\n\n` +
+					`Chi tiết lỗi:\n- ${failedDetails.join('\n- ')}`
+				)
+			} else {
+				alert(`Update sheet xong: ${successCount} thành công, ${failedCount} lỗi`)
+			}
+		} catch (err) {
+			alert(`Update sheet lỗi: ${err.message || 'Không thể update hàng loạt'}`)
+		} finally {
+			setIsBatchUploading(false)
 		}
 	}
 
@@ -304,12 +475,47 @@ export default function StickerPage() {
 				</div>
 			)}
 
+			
+
 			{error && <p className="mt-3 text-sm text-red-600">{error}</p>}
 
 			<div className="mt-8 flex flex-wrap items-center justify-between gap-3">
 				<h2 className="text-3xl font-semibold tracking-tight text-zinc-900">
 					Sticker Workspace ({data.length} Items)
 				</h2>
+				{data.length > 0 ? (
+					<div className="flex flex-wrap items-center gap-2">
+						<span className="rounded-lg bg-zinc-200 px-3 py-2 text-xs font-medium text-zinc-700">
+							Đã chọn: {selectedCount} | Sẵn sàng update: {selectedReadyCount}
+						</span>
+						{currentPageReadyCount > 0 && (selectedCount === 0 || selectedReadyCount < selectedCount) ? (
+							<button
+								type="button"
+								onClick={selectAllCurrentPage}
+								className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+							>
+								Chọn trang này
+							</button>
+						) : null}
+						{selectedCount > 0 ? (
+							<button
+								type="button"
+								onClick={clearSelection}
+								className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+							>
+								Bỏ chọn
+							</button>
+						) : null}
+						<button
+							type="button"
+							onClick={handleUploadSelected}
+							disabled={!selectedReadyCount || isBatchUploading}
+							className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+						>
+							{isBatchUploading ? 'Đang update...' : 'Update đã chọn'}
+						</button>
+					</div>
+				) : null}
 			</div>
 
 			{data.length === 0 ? (
@@ -323,6 +529,7 @@ export default function StickerPage() {
 							const globalIndex = (currentPage - 1) * pageSize + idx
 							const hasImage = isValidImageUrl(row.imageLink)
 							const result = masterResults[globalIndex]
+							const canSelect = !!result?.base64
 							const currentUploadStatus = uploadStatus[globalIndex]
 							const outputDataUrl = result?.base64 ? `data:${result.mimeType || 'image/png'};base64,${result.base64}` : ''
 
@@ -333,6 +540,16 @@ export default function StickerPage() {
 								>
 									<div className="mb-4 flex items-center justify-between gap-3">
 										<div className="flex items-center gap-3">
+											<label className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 bg-zinc-50 px-2 py-1 text-xs font-medium text-zinc-700">
+												<input
+													type="checkbox"
+													checked={!!selectedItems[globalIndex]}
+													onChange={() => toggleSelectItem(globalIndex, canSelect)}
+													disabled={!canSelect}
+													className="h-4 w-4 accent-emerald-500"
+												/>
+												<span>{canSelect ? 'Chọn' : 'Tạo master trước'}</span>
+											</label>
 											<div className="rounded-lg bg-indigo-100 px-3 py-2 text-center font-mono text-sm font-semibold text-indigo-700">
 												STT: {row.stt || globalIndex + 1}
 											</div>

@@ -6,6 +6,7 @@ const PAGE_STORAGE_KEYS = {
 	combosticker: 'comboStickerSheetData',
 	holoarcylic: 'holoarcylicSheetUrl',
 	suncatcher: 'suncatcherSheetUrl',
+	sticker: 'stickerSheetUrl',
 };
 
 const LEGACY_PAGE_STORAGE_KEYS = {

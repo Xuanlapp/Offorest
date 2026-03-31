@@ -25,6 +25,7 @@ const normalizeProductCode = (value = '') =>
     .replace(/[_\s]+/g, '-')
 
 const PRODUCT_PERMISSION_MAP = {
+  sticker: PERMISSIONS.STICKER_VIEW,
   combosticker: PERMISSIONS.COMBO_STICKER_VIEW,
   'combo-sticker': PERMISSIONS.COMBO_STICKER_VIEW,
   'combo-sticker-view': PERMISSIONS.COMBO_STICKER_VIEW,
@@ -39,6 +40,7 @@ const PRODUCT_PERMISSION_MAP = {
 }
 
 const PRODUCT_PATH_MAP = {
+  sticker: APP_MODES.sticker?.path,
   combosticker: APP_MODES.combosticker?.path,
   'combo-sticker': APP_MODES.combosticker?.path,
   'combo-sticker-view': APP_MODES.combosticker?.path,
