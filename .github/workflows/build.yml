@@ -21,7 +21,7 @@ jobs:
         run: npm ci
 
       - name: Build & Package (Mac)
-        run: npm run dist:mac
+        run: npm run build && electron-builder --mac dmg zip --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
@@ -50,7 +50,7 @@ jobs:
         run: npm ci
 
       - name: Build & Package (Windows)
-        run: npm run dist:win
+        run: npm run build && electron-builder --win nsis --publish never
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
