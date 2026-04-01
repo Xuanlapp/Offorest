@@ -254,7 +254,7 @@ export default function SuncatcherPage() {
     }))
 
     try {
-      const result = await redesignImage(imageLink, null, PROMPTS.suncatcher)
+      const result = await redesignImage(imageLink,  PROMPTS.suncatcher)
       setRedesignResults((prev) => ({
         ...prev,
         [globalIndex]: { loading: false, base64: result.base64, mimeType: result.mimeType, error: null },

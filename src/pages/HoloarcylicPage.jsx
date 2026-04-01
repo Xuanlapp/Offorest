@@ -290,7 +290,7 @@ export default function HoloarcylicPage() {
         .filter(Boolean)
         .join('\n\n')
       
-      const result = await redesignImage(imageLink, null, fullPrompt)
+      const result = await redesignImage(imageLink,  fullPrompt)
       setRedesignResults((prev) => ({
         ...prev,
         [globalIndex]: { loading: false, base64: result.base64, mimeType: result.mimeType, error: null },

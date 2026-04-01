@@ -7,7 +7,7 @@ const { autoUpdater } = electronUpdaterPkg;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const devServerUrl = 'http://localhost:5173';
+const devServerUrl = process.env.OFFOREST_DEV_SERVER_URL || 'http://127.0.0.1:5173';
 
 function setupAutoUpdater(win) {
   if (!app.isPackaged) return;

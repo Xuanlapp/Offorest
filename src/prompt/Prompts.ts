@@ -102,47 +102,15 @@ export const PROMPTS: Record<string, string> = {
   lifestyleGenerate: `Mockup lifestyle chân thực (photorealistic) cho '{{keyword}}' chất lượng cao, với design được cung cấp áp lên vị trí in/nhãn; bản in/nhãn phải cực kỳ sắc nét, cân giữa, đúng màu & layout gốc, viền sạch, không méo/nhăn, không bị che khuất, không thêm chữ/logo. Bối cảnh: {{boi_canh}}. Nhân vật: {{doi_tuong}} đang hành động tự nhiên (ưu tiên pose giúp thấy rõ sản phẩm; sản phẩm là hero). Mood & vibe: {{mood_vibe}}. Props: {{props}} (chỉ bổ trợ, không che thiết kế, không sử dụng hình ảnh bản quyền thương hiệu cũng như text như instax, pepsi,...). Lighting: ánh sáng đúng bối cảnh, bóng đổ thật, không lóa che vùng in/nhãn, cinematic depth of field. Composition: hero focus vào vùng in/nhãn, thiết kế nhìn thấy 100%, rule of thirds, 35mm lens, shallow DOF, commercial lifestyle photography, ultra realistic, high detail, natural look, clean bokeh background, high resolution.
     NEGATIVE PROMPT:
     blurry, low quality, warped print/label, distorted design, unreadable text, wrong colors, extra typography, extra text, watermark, random logo, harsh glare covering design, messy background, overexposed, underexposed, low contrast, oversaturated, bad anatomy, extra fingers, deformed hands, duplicated limbs`,
-  holographicOrnament: `You are a professional designer creating photorealistic 2D ornament artwork for Etsy print-on-demand.
+  holographicOrnament: `You are a professional designer creating photorealistic 2D ornament artwork for Etsy print-on-demand. CORE REQUIREMENTS Generate a photorealistic image based on the reference. The result must look like real product photography. SHAPE & STRUCTURE (LOCKED) Keep the EXACT object shape, proportions, perspective, and material. Do NOT modify the physical object. LIGHTING & COMPOSITION Match original lighting, shadows, and highlights. Maintain the same composition and placement. Use a clean, minimal background.REMOVE LOGOS / TEXT
+Remove all logos, brand marks, and original printed text from the image.
+Do not recreate or replace them with similar elements.
+The surface must contain only the newly redesigned subject. SUBJECT REDESIGN (CRITICAL) You MUST redesign the original subject. Do NOT reuse or copy the original artwork. The new subject must be a redesigned version of the original. SUBJECT CATEGORY RULE (MANDATORY) Person → must remain a person Animal → must remain the same type of animal Object → must remain an object NO category transformation REDESIGN LIMITS You may adjust: pose outfit expression visual presentation (still photorealistic) Do NOT change the core identity STRICT NEGATIVE RULES No additional subjects No extra animals No props No background elements No scene expansion STYLE CONTROL Photorealistic Natural lighting Real textures NOT cartoon, NOT illustration OUTPUT Single image only High resolution, print-ready No watermark, no text, no border,`,
+  sticker: `You are a creative visual-intelligence AI assistant whose main function is to craft one clear, vivid, and well-structured image-generation prompt for producing a single sticker design. This prompt must be based on a thorough visual and emotional analysis of one provided reference image only.
 
-CORE REQUIREMENTS
-Generate a photorealistic image based on the reference.
-The result must look like real product photography.
-SHAPE & STRUCTURE (LOCKED)
-Keep the EXACT object shape, proportions, perspective, and material.
-Do NOT modify the physical object.
-LIGHTING & COMPOSITION
-Match original lighting, shadows, and highlights.
-Maintain the same composition and placement.
-Use a clean, minimal background.
-SUBJECT REDESIGN (CRITICAL)
-You MUST redesign the original subject.
-Do NOT reuse or copy the original artwork.
-The new subject must be a redesigned version of the original.
-SUBJECT CATEGORY RULE (MANDATORY)
-Person → must remain a person
-Animal → must remain the same type of animal
-Object → must remain an object
-NO category transformation
-REDESIGN LIMITS
-You may adjust:
-pose
-outfit
-expression
-visual presentation (still photorealistic)
-Do NOT change the core identity
-STRICT NEGATIVE RULES
-No additional subjects
-No extra animals
-No props
-No background elements
-No scene expansion
-STYLE CONTROL
-Photorealistic
-Natural lighting
-Real textures
-NOT cartoon, NOT illustration
-OUTPUT
-Single image only
-High resolution, print-ready
-No watermark, no text, no border, no logo`,
+Your task is to examine one input product image and determine whether it is an actual sticker product. If it is, identify the main subject, supporting elements, color palette, emotional tone, visual language, composition, outline treatment, and any text that appears in the design. Base your output only on the characteristics visible in this single reference image, and do not combine traits from imagined or external examples.
+
+The final generated sticker must be exactly one sticker with a transparent background, bold thick outlines, vector-style sharpness and clarity, and a complete composition that fits neatly within a square ratio with nothing cropped, cut off, or missing. Keep the design clean, balanced, print-ready, and visually strong for Print-on-Demand use. Do not add unnecessary background scenery or unrelated decorative elements. If the original sticker contains text, preserve that text exactly as shown, without translating, paraphrasing, correcting, or modifying it in any way.
+
+Output only one plain natural-language prompt string, with no JSON, no code block, and no extra explanation. The prompt must explicitly state that it is one sticker, in vector style, sharp resolution, transparent background, thick outlines, square composition, and fully visible without cropping. The wording should be direct, clear, descriptive, and sound like a confident art director briefing an AI designer to create a single premium-quality sticker`
 }

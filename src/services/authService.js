@@ -92,10 +92,8 @@ export const login = async (username, password) => {
       token: data.token || data.access_token,
       products,
       permissions,
-      api_keys: typeof data?.api_keys === 'object' ? data.api_keys : {},
     }
     localStorage.setItem('user', JSON.stringify(user))
-    console.log('Login successful:', user)
     return user
   } catch (error) {
     throw new Error(error.message || 'Không thể kết nối đến server. Vui lòng kiểm tra lại.')
@@ -155,16 +153,4 @@ export const hasPermission = (user, requiredPermissions = []) => {
   return requiredPermissions.some((permission) =>
     user.permissions.includes(permission)
   )
-}
-
-export const getApiKeyByProvider = (provider = 'gemini') => {
-  const user = getCurrentUser()
-  if (!user?.api_keys || typeof user.api_keys !== 'object') return null
-
-  const apiKeyObj = user.api_keys[provider]
-  if (apiKeyObj?.is_active) {
-    return apiKeyObj.key || null
-  }
-
-  return null
 }

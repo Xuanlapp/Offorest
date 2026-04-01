@@ -1,24 +1,28 @@
 /**
  * Gemini Service - Image Redesign & AI Generation
- * Routes all AI calls through offorest-wp.lap backend
- * Backend looks up API key by user_id and forwards to Gemini
+ * Routes all AI calls through Offorest backend APIs.
+ * Frontend only sends user auth token; no client-side api_key handling.
  */
 
 import { getCurrentUser } from './authService'
 import { PROMPTS } from '../prompt/Prompts'
 
 const BACKEND_URL ='https://nhxlap.id.vn/wp-json/offorest-api/v1'
-const LOCAL_BACKEND_URL = 'http://offorest-wp.lap/wp-json/offorest-api/v1'
+const LOCAL_BACKEND_URL = 'http://offorest-wp.com.vn/wp-json/offorest-api/v1'
 
 const REQUEST_CONFIG = {
   minGapMs: 1200,
   maxAttempts: 5,
   baseBackoffMs: 2000,
   maxBackoffMs: 30000,
+  maxConcurrent: 2,
 }
 
-let backendQueue = Promise.resolve()
 let lastRequestTime = 0
+
+// Queue variables for concurrency-limited request handling
+let _requestQueue = []
+let _activeCount = 0
 
 // ==================== CORE REQUEST ====================
 
@@ -60,10 +64,9 @@ const parseRetryAfterMs = (response) => {
 const isRetryableStatus = (status) => [429, 500, 502, 503, 504].includes(status)
 
 const isRetryableError = (error) => {
-  if (!error) return false
-  if (error.isNetworkError) return true
-  if (typeof error.status === 'number' && isRetryableStatus(error.status)) return true
-  return false
+  return !!(
+    error && (error.isNetworkError || (typeof error.status === 'number' && isRetryableStatus(error.status)))
+  )
 }
 
 const getRetryDelayMs = (attempt, retryAfterMs = 0) => {
@@ -77,21 +80,41 @@ const getRetryDelayMs = (attempt, retryAfterMs = 0) => {
   return Math.min(REQUEST_CONFIG.maxBackoffMs, jittered)
 }
 
-const enqueueSequentialRequest = async (task) => {
-  const run = async () => {
-    const elapsed = Date.now() - lastRequestTime
-    const waitMs = Math.max(0, REQUEST_CONFIG.minGapMs - elapsed)
-    if (waitMs > 0) {
-      await sleep(waitMs)
-    }
+const processQueue = async () => {
+  if (_activeCount >= REQUEST_CONFIG.maxConcurrent) return
+  const item = _requestQueue.shift()
+  if (!item) return
 
-    lastRequestTime = Date.now()
-    return task()
+  _activeCount += 1
+
+  const run = async () => {
+    try {
+      const elapsed = Date.now() - lastRequestTime
+      const waitMs = Math.max(0, REQUEST_CONFIG.minGapMs - elapsed)
+      if (waitMs > 0) await sleep(waitMs)
+
+      lastRequestTime = Date.now()
+      const result = await item.task()
+      item.resolve(result)
+    } catch (err) {
+      item.reject(err)
+    } finally {
+      _activeCount -= 1
+      // continue processing next items
+      // small timeout to avoid tight loop
+      setTimeout(processQueue, 0)
+    }
   }
 
-  const queuedTask = backendQueue.then(run, run)
-  backendQueue = queuedTask.catch(() => null)
-  return queuedTask
+  run()
+}
+
+const enqueueSequentialRequest = (task) => {
+  return new Promise((resolve, reject) => {
+    _requestQueue.push({ task, resolve, reject })
+    // try to process immediately
+    processQueue()
+  })
 }
 
 const performBackendRequest = async (baseUrl, endpoint, payload, headers) => {
@@ -227,7 +250,10 @@ const imageUrlToBase64 = async (imageUrl) => {
   for (const url of candidates) {
     try {
       const response = await fetch(url)
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      if (!response.ok) {
+        lastError = new Error(`HTTP ${response.status}`)
+        continue
+      }
 
       const blob = await response.blob()
       const mimeType = blob.type || 'image/jpeg'
@@ -235,7 +261,8 @@ const imageUrlToBase64 = async (imageUrl) => {
       const rawBase64 = dataUrl.split(',')[1]
 
       if (!rawBase64) {
-        throw new Error('Không lấy được chuỗi base64 từ data URL')
+        lastError = new Error('Không lấy được chuỗi base64 từ data URL')
+        continue
       }
 
       return { base64: rawBase64, mimeType, dataUrl }
@@ -417,14 +444,14 @@ const buildUserPayload = () => {
 // ==================== IMAGE REDESIGN (PRIMARY) ====================
 
 /**
- * Redesign image: frontend build Gemini format → gửi backend → backend forward Gemini với API key của user
+ * Redesign image: frontend build Gemini format → gửi backend → backend forward Gemini
+ * Backend không cần API key từ client nữa (backend tự quản lý)
  *
  * @param {string} imageUrl  - Source image URL
- * @param {string} _apiKey   - Không dùng nữa (backend tự lấy qua user_id)
  * @param {string} prompt    - Design prompt (lấy từ PROMPTS)
  * @returns {Promise<{base64: string, mimeType: string}>}
  */
-export const redesignImage = async (imageUrl, _apiKey, prompt) => {
+export const redesignImage = async (imageUrl, prompt) => {
 
   if (!imageUrl) throw new Error('Không có ảnh nguồn.')
   if (!prompt) throw new Error('Không có prompt redesign.')
@@ -458,8 +485,7 @@ export const redesignImage = async (imageUrl, _apiKey, prompt) => {
       },
     },
   }
-   console.log('lapday ', prompt)
- // const headers = getAuthHeaders()
+  // const headers = getAuthHeaders()
   const data = await callBackend('/vertex/ornament', payload)
 
   const extracted = extractImageResult(data)
@@ -477,6 +503,8 @@ export const redesignImage = async (imageUrl, _apiKey, prompt) => {
 export const createStickerMaster = async ({ file = null, imageUrl = '', prompt = '' }) => {
   if (!prompt) throw new Error('Không có prompt tạo Sticker Master.')
 
+  // Read source image (support file or URL) — previous code referenced undefined `mimeType`/`base64`
+  const { base64, mimeType } = await sourceImageToBase64({ file, imageUrl })
 
   const payload = {
     contents: [
@@ -490,7 +518,7 @@ export const createStickerMaster = async ({ file = null, imageUrl = '', prompt =
             },
           },
           {
-            text : prompt,
+            text: prompt,
           },
         ],
       },
@@ -531,7 +559,7 @@ export const analyzeStickerImage = async ({ file = null, imageUrl = '', prompt =
     "text": prompt,
   }
 
-  const data = await callLocalBackend('/vertex/sticker/analyze', payload)
+  const data = await callBackend('/vertex/sticker/analyze', payload)
 
   const extracted = extractImageResult(data)
   if (!extracted?.base64) {
@@ -792,10 +820,7 @@ export const generateLifestyleImage = async ({ file = null, imageUrl = '', keywo
 // ==================== BATCH IMAGE REDESIGN ====================
 
 export const redesignImageBatch = async (imageUrls, prompt) => {
-  const results = await Promise.all(
-    imageUrls.map((url) => redesignImage(url, null, prompt))
-  )
-  return results
+  return Promise.all(imageUrls.map((url) => redesignImage(url, prompt)))
 }
 
 // ==================== UTILITY EXPORTS ====================
@@ -816,3 +841,4 @@ export default {
   sourceImageToBase64,
   dataUrlToParts,
 }
+
