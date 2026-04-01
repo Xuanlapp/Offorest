@@ -102,48 +102,47 @@ export const PROMPTS: Record<string, string> = {
   lifestyleGenerate: `Mockup lifestyle chân thực (photorealistic) cho '{{keyword}}' chất lượng cao, với design được cung cấp áp lên vị trí in/nhãn; bản in/nhãn phải cực kỳ sắc nét, cân giữa, đúng màu & layout gốc, viền sạch, không méo/nhăn, không bị che khuất, không thêm chữ/logo. Bối cảnh: {{boi_canh}}. Nhân vật: {{doi_tuong}} đang hành động tự nhiên (ưu tiên pose giúp thấy rõ sản phẩm; sản phẩm là hero). Mood & vibe: {{mood_vibe}}. Props: {{props}} (chỉ bổ trợ, không che thiết kế, không sử dụng hình ảnh bản quyền thương hiệu cũng như text như instax, pepsi,...). Lighting: ánh sáng đúng bối cảnh, bóng đổ thật, không lóa che vùng in/nhãn, cinematic depth of field. Composition: hero focus vào vùng in/nhãn, thiết kế nhìn thấy 100%, rule of thirds, 35mm lens, shallow DOF, commercial lifestyle photography, ultra realistic, high detail, natural look, clean bokeh background, high resolution.
     NEGATIVE PROMPT:
     blurry, low quality, warped print/label, distorted design, unreadable text, wrong colors, extra typography, extra text, watermark, random logo, harsh glare covering design, messy background, overexposed, underexposed, low contrast, oversaturated, bad anatomy, extra fingers, deformed hands, duplicated limbs`,
-  holographicOrnament: `You are a professional designer creating a photorealistic 2D ornament artwork for Etsy print-on-demand.
-    CORE REQUIREMENTS:
-    Generate a photorealistic image based strictly on the provided reference.
-    SHAPE & STRUCTURE:
-    - Keep the EXACT same shape, proportions, perspective, and material.
-    - Do NOT modify or reinterpret the object form in any way.
+  holographicOrnament: `You are a professional designer creating photorealistic 2D ornament artwork for Etsy print-on-demand.
 
-    LIGHTING & SCENE:
-    - Match the original lighting direction, intensity, shadows, and highlights.
-    - Maintain the same composition and object placement.
-    - Use a clean, minimal background.
-
-    SUBJECT LOCK (CRITICAL):
-    - Preserve the original subject EXACTLY.
-    - Do NOT change subject type.
-    - Do NOT replace the subject.
-    - Do NOT add any new subjects, characters, animals, objects, or decorative elements.
-    - Do NOT generate background elements.
-    - Do NOT create secondary subjects.
-
-    SURFACE REDESIGN ONLY:
-    - Only redesign the artwork printed on the surface (character, text, or pattern).
-    - Do NOT modify the object itself.
-
-    CHARACTER RULES:
-    - Keep the same subject category (pet remains pet, person remains person, etc.).
-    - Only adjust visual details (pose, outfit, hairstyle, style).
-    - Maintain the same emotional tone and overall identity.
-
-    STYLE CONTROL:
-    - Photorealistic, real photography style.
-    - Natural lighting, soft shadows, high detail, real textures.
-    - NOT illustration, NOT cartoon, NOT vector, NOT stylized.
-
-    STRICT NEGATIVE RULES:
-    - No extra animals (no dogs, no cats, no birds, etc.)
-    - No props, no decorations, no environmental additions
-    - No scene expansion
-    - No creative additions beyond the original subject
-
-    OUTPUT:
-    - Single image only
-    - High resolution, print-ready
-    - No watermark, no text overlay, no border`,
+CORE REQUIREMENTS
+Generate a photorealistic image based on the reference.
+The result must look like real product photography.
+SHAPE & STRUCTURE (LOCKED)
+Keep the EXACT object shape, proportions, perspective, and material.
+Do NOT modify the physical object.
+LIGHTING & COMPOSITION
+Match original lighting, shadows, and highlights.
+Maintain the same composition and placement.
+Use a clean, minimal background.
+SUBJECT REDESIGN (CRITICAL)
+You MUST redesign the original subject.
+Do NOT reuse or copy the original artwork.
+The new subject must be a redesigned version of the original.
+SUBJECT CATEGORY RULE (MANDATORY)
+Person → must remain a person
+Animal → must remain the same type of animal
+Object → must remain an object
+NO category transformation
+REDESIGN LIMITS
+You may adjust:
+pose
+outfit
+expression
+visual presentation (still photorealistic)
+Do NOT change the core identity
+STRICT NEGATIVE RULES
+No additional subjects
+No extra animals
+No props
+No background elements
+No scene expansion
+STYLE CONTROL
+Photorealistic
+Natural lighting
+Real textures
+NOT cartoon, NOT illustration
+OUTPUT
+Single image only
+High resolution, print-ready
+No watermark, no text, no border, no logo`,
 }

@@ -10,6 +10,16 @@ import { PROMPTS } from '../prompt/Prompts'
 const BACKEND_URL ='https://nhxlap.id.vn/wp-json/offorest-api/v1'
 const LOCAL_BACKEND_URL = 'http://offorest-wp.lap/wp-json/offorest-api/v1'
 
+const REQUEST_CONFIG = {
+  minGapMs: 1200,
+  maxAttempts: 5,
+  baseBackoffMs: 2000,
+  maxBackoffMs: 30000,
+}
+
+let backendQueue = Promise.resolve()
+let lastRequestTime = 0
+
 // ==================== CORE REQUEST ====================
 
 const getAuthHeaders = () => {
@@ -22,13 +32,73 @@ const getAuthHeaders = () => {
   }
 }
 
-const callBackend = async (endpoint, payload) => {
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+const randomJitter = (baseMs, ratio = 0.35) => {
+  const min = Math.max(0, 1 - ratio)
+  const max = 1 + ratio
+  return baseMs * (min + Math.random() * (max - min))
+}
+
+const parseRetryAfterMs = (response) => {
+  const retryAfter = response.headers.get('retry-after')
+  if (!retryAfter) return 0
+
+  const numeric = Number(retryAfter)
+  if (!Number.isNaN(numeric) && numeric > 0) {
+    return numeric * 1000
+  }
+
+  const dateMs = Date.parse(retryAfter)
+  if (!Number.isNaN(dateMs)) {
+    return Math.max(0, dateMs - Date.now())
+  }
+
+  return 0
+}
+
+const isRetryableStatus = (status) => [429, 500, 502, 503, 504].includes(status)
+
+const isRetryableError = (error) => {
+  if (!error) return false
+  if (error.isNetworkError) return true
+  if (typeof error.status === 'number' && isRetryableStatus(error.status)) return true
+  return false
+}
+
+const getRetryDelayMs = (attempt, retryAfterMs = 0) => {
+  if (retryAfterMs > 0) {
+    return Math.min(REQUEST_CONFIG.maxBackoffMs, Math.round(randomJitter(retryAfterMs, 0.2)))
+  }
+
+  const exponent = Math.max(0, attempt - 1)
+  const baseDelay = REQUEST_CONFIG.baseBackoffMs * (2 ** exponent)
+  const jittered = Math.round(randomJitter(baseDelay))
+  return Math.min(REQUEST_CONFIG.maxBackoffMs, jittered)
+}
+
+const enqueueSequentialRequest = async (task) => {
+  const run = async () => {
+    const elapsed = Date.now() - lastRequestTime
+    const waitMs = Math.max(0, REQUEST_CONFIG.minGapMs - elapsed)
+    if (waitMs > 0) {
+      await sleep(waitMs)
+    }
+
+    lastRequestTime = Date.now()
+    return task()
+  }
+
+  const queuedTask = backendQueue.then(run, run)
+  backendQueue = queuedTask.catch(() => null)
+  return queuedTask
+}
+
+const performBackendRequest = async (baseUrl, endpoint, payload, headers) => {
   let response
   const normalizedEndpoint = String(endpoint || '').replace(/^\/+/, '')
-  const url = new URL(normalizedEndpoint, `${BACKEND_URL}/`).toString()
-  const headers = getAuthHeaders()
+  const url = new URL(normalizedEndpoint, `${baseUrl}/`).toString()
 
- 
   try {
     response = await fetch(url, {
       method: 'POST',
@@ -37,10 +107,13 @@ const callBackend = async (endpoint, payload) => {
     })
   } catch (error) {
     console.error('Backend Network Error:', error)
-    throw new Error('Không thể kết nối backend (network/CORS). Kiểm tra lại API URL và CORS server.')
+    const networkError = new Error('Không thể kết nối backend (network/CORS). Kiểm tra lại API URL và CORS server.')
+    networkError.isNetworkError = true
+    throw networkError
   }
 
   const contentType = response.headers.get('content-type') || ''
+  const retryAfterMs = parseRetryAfterMs(response)
   let data = null
 
   try {
@@ -65,59 +138,47 @@ const callBackend = async (endpoint, payload) => {
       status: response.status,
       data,
     })
-    throw new Error(data?.message || data?.error?.message || `API lỗi: ${response.status}`)
+
+    const apiError = new Error(data?.message || data?.error?.message || `API lỗi: ${response.status}`)
+    apiError.status = response.status
+    apiError.retryAfterMs = retryAfterMs
+    throw apiError
   }
+
   return data
+}
+
+const requestWithRetry = async (baseUrl, endpoint, payload) => {
+  const headers = getAuthHeaders()
+
+  for (let attempt = 1; attempt <= REQUEST_CONFIG.maxAttempts; attempt += 1) {
+    try {
+      return await enqueueSequentialRequest(() => performBackendRequest(baseUrl, endpoint, payload, headers))
+    } catch (error) {
+      const shouldRetry = attempt < REQUEST_CONFIG.maxAttempts && isRetryableError(error)
+      if (!shouldRetry) {
+        throw error
+      }
+
+      const retryDelayMs = getRetryDelayMs(attempt, error.retryAfterMs)
+      console.warn(
+        `[geminiService] Retry ${attempt}/${REQUEST_CONFIG.maxAttempts - 1} for ${endpoint} after ${retryDelayMs}ms`,
+        { status: error.status }
+      )
+      await sleep(retryDelayMs)
+    }
+  }
+
+  throw new Error('Đã vượt quá số lần thử lại request backend.')
+}
+
+const callBackend = async (endpoint, payload) => {
+  return requestWithRetry(BACKEND_URL, endpoint, payload)
 }
 
 
 const callLocalBackend = async (endpoint, payload) => {
-  let response
-  const normalizedEndpoint = String(endpoint || '').replace(/^\/+/, '')
-  const url = new URL(normalizedEndpoint, `${LOCAL_BACKEND_URL}/`).toString()
-  const headers = getAuthHeaders()
-
- 
-  try {
-    response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload),
-    })
-  } catch (error) {
-    console.error('Backend Network Error:', error)
-    throw new Error('Không thể kết nối backend (network/CORS). Kiểm tra lại API URL và CORS server.')
-  }
-
-  const contentType = response.headers.get('content-type') || ''
-  let data = null
-
-  try {
-    if (contentType.includes('application/json')) {
-      data = await response.json()
-    } else {
-      const text = await response.text()
-      try {
-        data = JSON.parse(text)
-      } catch {
-        data = { message: text }
-      }
-    }
-  } catch (parseError) {
-    console.error('Backend Parse Error:', parseError)
-    throw new Error(`Backend trả về dữ liệu không hợp lệ (status ${response.status}).`)
-  }
-
-  if (!response.ok) {
-    console.error('Backend API Error:', {
-      endpoint,
-      status: response.status,
-      data,
-    })
-    throw new Error(data?.message || data?.error?.message || `API lỗi: ${response.status}`)
-  }
-
-  return data
+  return requestWithRetry(LOCAL_BACKEND_URL, endpoint, payload)
 }
 
 // ==================== IMAGE HELPER ====================
@@ -470,7 +531,7 @@ export const analyzeStickerImage = async ({ file = null, imageUrl = '', prompt =
     "text": prompt,
   }
 
-  const data = await callBackend('/vertex/sticker/analyze', payload)
+  const data = await callLocalBackend('/vertex/sticker/analyze', payload)
 
   const extracted = extractImageResult(data)
   if (!extracted?.base64) {

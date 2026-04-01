@@ -283,8 +283,12 @@ export default function HoloarcylicPage() {
 
     try {
       const productName = data[globalIndex]?.sanPham || 'product'
+      const keyword = String(data[globalIndex]?.keyword || '').trim()
       const productPrefix = `The product is a ${productName}. Automatically detect and preserve its correct material, physical properties, and real-world appearance based on this product type.\n\n`
-      const fullPrompt = productPrefix + PROMPTS.holographicOrnament
+      const keywordRefinementInstruction =  `Use the provided keyword  (${keyword}) as the core subject direction, and refine or adjust the visual content around it while strictly preserving the original subject and without adding any new elements.`
+      const fullPrompt = [productPrefix + PROMPTS.holographicOrnament, keywordRefinementInstruction]
+        .filter(Boolean)
+        .join('\n\n')
       
       const result = await redesignImage(imageLink, null, fullPrompt)
       setRedesignResults((prev) => ({
