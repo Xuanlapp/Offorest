@@ -3,8 +3,14 @@ import { getSheetUrlForPage } from '../services/sheetConfigService'
 import { updateRecordInSheet } from '../services/googleDriveService'
 import { removeBackgroundSmart, REMOVAL_MODES } from '../services/backgroundRemovalService'
 import { analyzeStickerImage } from '../services/geminiService'
-import { PROMPTS } from '../prompt/Prompts'
+import { PROMPTS, PROMPT_DEFAULTS } from '../prompt/Prompts'
+import {
+	getPromptsMoiPath,
+	removePromptFromPromptsMoi,
+	savePromptToPromptsMoi,
+} from '../prompt/PromptsMoiService'
 import ImagePreviewEditorModal from '../components/ImagePreviewEditorModal'
+import PromptEditorModal from '../components/PromptEditorModal'
 
 export default function StickerPage() {
 	const [isLoading, setIsLoading] = useState(false)
@@ -19,6 +25,8 @@ export default function StickerPage() {
 	const [selectedItems, setSelectedItems] = useState({})
 	const [isBatchUploading, setIsBatchUploading] = useState(false)
 	const [editorState, setEditorState] = useState(null)
+	const [showPromptEditor, setShowPromptEditor] = useState(false)
+	const [stickerPrompt, setStickerPrompt] = useState(() => PROMPTS.sticker)
 
 	const totalPages = Math.max(1, Math.ceil(data.length / pageSize))
 
@@ -410,7 +418,7 @@ export default function StickerPage() {
 		try {
 			const created = await analyzeStickerImage({
 				imageUrl: row.imageLink,
-				prompt: `${PROMPTS.sticker}`,
+				prompt: stickerPrompt,
 			})
 
 			const transparentDataUrl = await removeBackgroundSmart(
@@ -453,6 +461,43 @@ export default function StickerPage() {
 
 	return (
 		<section className="rounded-2xl border border-zinc-200 bg-zinc-100/95 p-6 text-zinc-800">
+			<PromptEditorModal
+				isOpen={showPromptEditor}
+				title="Change Prompt - Sticker"
+				description="Chinh sua prompt dang dung cho Sticker page. Save de ap dung ngay cho lan tao tiep theo."
+				fields={[
+					{
+						key: 'stickerPrompt',
+						label: 'Sticker Prompt',
+						value: stickerPrompt,
+						oldValue: PROMPT_DEFAULTS.sticker,
+						rows: 14,
+					},
+				]}
+				onClose={() => setShowPromptEditor(false)}
+				onSave={async (values) => {
+					const nextPrompt = String(values.stickerPrompt ?? '')
+					setStickerPrompt(nextPrompt)
+					try {
+						await savePromptToPromptsMoi('sticker', nextPrompt)
+						const filePath = await getPromptsMoiPath()
+						if (filePath) {
+							alert(`Da luu prompt vao:\n${filePath}`)
+						}
+					} catch (error) {
+						alert(error?.message || 'Khong the luu prompt vao PromptsMoi.ts')
+					}
+				}}
+				onReset={async () => {
+					setStickerPrompt(PROMPT_DEFAULTS.sticker)
+					PROMPTS.sticker = PROMPT_DEFAULTS.sticker
+					try {
+						await removePromptFromPromptsMoi('sticker')
+					} catch (error) {
+						alert(error?.message || 'Khong the reset prompt trong PromptsMoi.ts')
+					}
+				}}
+			/>
 			{editorState ? (
 				<ImagePreviewEditorModal
 					asset={{
@@ -483,6 +528,13 @@ export default function StickerPage() {
 				<h2 className="text-3xl font-semibold tracking-tight text-zinc-900">
 					Sticker Workspace ({data.length} Items)
 				</h2>
+				<button
+					type="button"
+					onClick={() => setShowPromptEditor(true)}
+					className="rounded-lg border border-indigo-300 bg-white px-3 py-2 text-xs font-semibold text-indigo-600 hover:bg-indigo-50"
+				>
+					Change Prompt
+				</button>
 				{data.length > 0 ? (
 					<div className="flex flex-wrap items-center gap-2">
 						<span className="rounded-lg bg-zinc-200 px-3 py-2 text-xs font-medium text-zinc-700">

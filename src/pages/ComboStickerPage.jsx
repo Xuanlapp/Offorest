@@ -14,8 +14,14 @@ import {
   Upload,
   X,
 } from 'lucide-react'
-import { PROMPTS } from '../prompt/Prompts'
+import { PROMPTS, PROMPT_DEFAULTS } from '../prompt/Prompts'
 import { analyzeComboImage, generateComboStickerImage } from '../services/geminiService'
+import {
+  getPromptsMoiPath,
+  removePromptFromPromptsMoi,
+  savePromptToPromptsMoi,
+} from '../prompt/PromptsMoiService'
+import PromptEditorModal from '../components/PromptEditorModal'
 
 // ==================== CANVAS UTILS ====================
 
@@ -328,6 +334,10 @@ function StickerCard({ item, index, onEdit, onSimilar, onDelete }) {
 
 
 export default function ComboStickerPage() {
+  const [showPromptEditor, setShowPromptEditor] = useState(false)
+  const [comboAnalyzePrompt, setComboAnalyzePrompt] = useState(() => PROMPTS.combostickerAnalyze)
+  const [comboGeneratePrompt, setComboGeneratePrompt] = useState(() => PROMPTS.combostickerGenerate)
+
   // Google Drive settings
   const [globalAccessToken, setGlobalAccessToken] = useState(() => {
     return localStorage.getItem('googleDriveAccessToken') || '';
@@ -654,7 +664,7 @@ export default function ComboStickerPage() {
         imageUrl: ws.imageSourceUrl,
         keyword: ws.keyword,
         targetOutput: count,
-        prompt: PROMPTS.combostickerAnalyze,
+        prompt: comboAnalyzePrompt,
       })
 
       // Đảm bảo lấy đúng số lượng object theo targetOutput
@@ -681,7 +691,7 @@ export default function ComboStickerPage() {
             theme: normalized.theme,
             style: normalized.style,
             colorPalette: normalized.colorPalette,
-            prompt: PROMPTS.combostickerGenerate,
+            prompt: comboGeneratePrompt,
           })
 
           const processed = await processItem({
@@ -736,7 +746,7 @@ export default function ComboStickerPage() {
         theme: ws.analysisResult.theme,
         style: ws.analysisResult.style,
         colorPalette: ws.analysisResult.colorPalette,
-        prompt: PROMPTS.combostickerGenerate,
+        prompt: comboGeneratePrompt,
       })
       const processed = await processItem({
         id: `${pick}-${Date.now()}`,
@@ -771,7 +781,7 @@ export default function ComboStickerPage() {
         theme: ws.analysisResult?.theme || '',
         style: ws.analysisResult?.style || '',
         colorPalette: ws.analysisResult?.colorPalette || [],
-        prompt: PROMPTS.combostickerGenerate,
+        prompt: comboGeneratePrompt,
       })
 
       const processed = await processItem({
@@ -824,7 +834,7 @@ export default function ComboStickerPage() {
         theme: ws.analysisResult?.theme || '',
         style: ws.analysisResult?.style || '',
         colorPalette: ws.analysisResult?.colorPalette || [],
-        prompt: PROMPTS.combostickerGenerate,
+        prompt: comboGeneratePrompt,
       })
 
       const processed = await processItem({
@@ -865,6 +875,58 @@ export default function ComboStickerPage() {
 
   return (
     <>
+      <PromptEditorModal
+        isOpen={showPromptEditor}
+        title="Change Prompt - Combo Sticker"
+        description="Chinh sua prompt Analyze va Generate cho Combo Sticker page. Save de ap dung ngay cho lan run tiep theo."
+        fields={[
+          {
+            key: 'comboAnalyzePrompt',
+            label: 'Analyze Prompt',
+            value: comboAnalyzePrompt,
+            oldValue: PROMPT_DEFAULTS.combostickerAnalyze,
+            rows: 10,
+          },
+          {
+            key: 'comboGeneratePrompt',
+            label: 'Generate Prompt',
+            value: comboGeneratePrompt,
+            oldValue: PROMPT_DEFAULTS.combostickerGenerate,
+            rows: 10,
+          },
+        ]}
+        onClose={() => setShowPromptEditor(false)}
+        onSave={async (values) => {
+          const nextAnalyze = String(values.comboAnalyzePrompt ?? '')
+          const nextGenerate = String(values.comboGeneratePrompt ?? '')
+
+          setComboAnalyzePrompt(nextAnalyze)
+          setComboGeneratePrompt(nextGenerate)
+          try {
+            await savePromptToPromptsMoi('combostickerAnalyze', nextAnalyze)
+            await savePromptToPromptsMoi('combostickerGenerate', nextGenerate)
+            const filePath = await getPromptsMoiPath()
+            if (filePath) {
+              alert(`Da luu prompt vao:\n${filePath}`)
+            }
+          } catch (error) {
+            alert(error?.message || 'Khong the luu prompt vao PromptsMoi.ts')
+          }
+        }}
+        onReset={async () => {
+          setComboAnalyzePrompt(PROMPT_DEFAULTS.combostickerAnalyze)
+          setComboGeneratePrompt(PROMPT_DEFAULTS.combostickerGenerate)
+          PROMPTS.combostickerAnalyze = PROMPT_DEFAULTS.combostickerAnalyze
+          PROMPTS.combostickerGenerate = PROMPT_DEFAULTS.combostickerGenerate
+          try {
+            await removePromptFromPromptsMoi('combostickerAnalyze')
+            await removePromptFromPromptsMoi('combostickerGenerate')
+          } catch (error) {
+            alert(error?.message || 'Khong the reset prompt trong PromptsMoi.ts')
+          }
+        }}
+      />
+
       {/* Workspace Tabs */}
       <div className="flex gap-2 mb-6">
         {workspaces.map((ws, idx) => (
@@ -920,6 +982,13 @@ export default function ComboStickerPage() {
                   <h2 className="text-sm font-semibold text-zinc-700">Image Analysis Session</h2>
                 </div>
                 <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-2 rounded-full border border-indigo-300 bg-white px-4 py-2 text-xs font-semibold text-indigo-600 transition hover:bg-indigo-50"
+                    onClick={() => setShowPromptEditor(true)}
+                  >
+                    Change Prompt
+                  </button>
                   <button
                     type="button"
                     className="inline-flex items-center gap-2 rounded-full bg-indigo-400 px-4 py-2 text-xs font-semibold text-white transition hover:bg-indigo-500"

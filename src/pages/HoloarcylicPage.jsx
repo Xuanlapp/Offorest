@@ -3,8 +3,14 @@ import { getCurrentUser } from '../services/authService'
 import { redesignImage, generateLifestyleImage } from '../services/geminiService'
 import { getSheetUrlForPage } from '../services/sheetConfigService'
 import { updateDesignPageImages } from '../services/googleDriveService'
-import { PROMPTS } from '../prompt/Prompts'
+import { PROMPTS, PROMPT_DEFAULTS } from '../prompt/Prompts'
+import {
+  getPromptsMoiPath,
+  removePromptFromPromptsMoi,
+  savePromptToPromptsMoi,
+} from '../prompt/PromptsMoiService'
 import ImagePreviewEditorModal from '../components/ImagePreviewEditorModal'
+import PromptEditorModal from '../components/PromptEditorModal'
 
 export default function HoloarcylicPage() {
   const [isLoading, setIsLoading] = useState(false)
@@ -24,6 +30,8 @@ export default function HoloarcylicPage() {
   const [uploadStatus, setUploadStatus] = useState({})
   const [lifestyleResults, setLifestyleResults] = useState({})
   const [editorState, setEditorState] = useState(null)
+  const [showPromptEditor, setShowPromptEditor] = useState(false)
+  const [holoPrompt, setHoloPrompt] = useState(() => PROMPTS.holographicOrnament)
   const productNames = useMemo(() => {
     const uniqueProducts = new Set(
       data
@@ -286,7 +294,7 @@ export default function HoloarcylicPage() {
       const keyword = String(data[globalIndex]?.keyword || '').trim()
       const productPrefix = `The product is a ${productName}. Automatically detect and preserve its correct material, physical properties, and real-world appearance based on this product type.\n\n`
       const keywordRefinementInstruction =  `Use the provided keyword  (${keyword}) as the core subject direction, and refine or adjust the visual content around it while strictly preserving the original subject and without adding any new elements.`
-      const fullPrompt = [productPrefix + PROMPTS.holographicOrnament, keywordRefinementInstruction]
+      const fullPrompt = [productPrefix + holoPrompt, keywordRefinementInstruction]
         .filter(Boolean)
         .join('\n\n')
       
@@ -668,6 +676,43 @@ export default function HoloarcylicPage() {
 
   return (
     <section className="rounded-2xl border border-zinc-200 bg-zinc-100/95 p-6 text-zinc-800">
+        <PromptEditorModal
+          isOpen={showPromptEditor}
+          title="Change Prompt - Holoarcylic"
+          description="Chinh sua prompt dang dung cho Holoarcylic page. Save de ap dung ngay cho lan tao tiep theo."
+          fields={[
+            {
+              key: 'holoPrompt',
+              label: 'Holoarcylic Prompt',
+              value: holoPrompt,
+              oldValue: PROMPT_DEFAULTS.holographicOrnament,
+              rows: 14,
+            },
+          ]}
+          onClose={() => setShowPromptEditor(false)}
+          onSave={async (values) => {
+            const nextPrompt = String(values.holoPrompt ?? '')
+            setHoloPrompt(nextPrompt)
+            try {
+              await savePromptToPromptsMoi('holographicOrnament', nextPrompt)
+              const filePath = await getPromptsMoiPath()
+              if (filePath) {
+                alert(`Da luu prompt vao:\n${filePath}`)
+              }
+            } catch (error) {
+              alert(error?.message || 'Khong the luu prompt vao PromptsMoi.ts')
+            }
+          }}
+          onReset={async () => {
+            setHoloPrompt(PROMPT_DEFAULTS.holographicOrnament)
+            PROMPTS.holographicOrnament = PROMPT_DEFAULTS.holographicOrnament
+            try {
+              await removePromptFromPromptsMoi('holographicOrnament')
+            } catch (error) {
+              alert(error?.message || 'Khong the reset prompt trong PromptsMoi.ts')
+            }
+          }}
+        />
         {editorState ? (
           <ImagePreviewEditorModal
             asset={{
@@ -696,6 +741,13 @@ export default function HoloarcylicPage() {
           Design Workspace ({filteredRowsWithIndex.length} Items)
         </h2>
         <div className="flex flex-wrap items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => setShowPromptEditor(true)}
+            className="rounded-lg border border-indigo-300 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-600 hover:bg-indigo-50"
+          >
+            Change Prompt
+          </button>
           <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => setSelectedProduct('ALL')}

@@ -204,6 +204,21 @@ const callLocalBackend = async (endpoint, payload) => {
   return requestWithRetry(LOCAL_BACKEND_URL, endpoint, payload)
 }
 
+const logOutgoingPrompt = (label, promptText) => {
+  const normalizedPrompt = String(promptText || '')
+  console.groupCollapsed(`[Prompt Sent] ${label}`)
+  console.log(normalizedPrompt)
+  console.groupEnd()
+
+  if (typeof window !== 'undefined') {
+    window.__OFFOREST_LAST_PROMPT__ = {
+      label,
+      prompt: normalizedPrompt,
+      at: new Date().toISOString(),
+    }
+  }
+}
+
 // ==================== IMAGE HELPER ====================
 
 /**
@@ -456,6 +471,8 @@ export const redesignImage = async (imageUrl, prompt) => {
   if (!imageUrl) throw new Error('Không có ảnh nguồn.')
   if (!prompt) throw new Error('Không có prompt redesign.')
 
+  logOutgoingPrompt('redesignImage', prompt)
+
   // Fetch ảnh và convert base64
   const { base64, mimeType } = await imageUrlToBase64(imageUrl)
 
@@ -503,6 +520,8 @@ export const redesignImage = async (imageUrl, prompt) => {
 export const createStickerMaster = async ({ file = null, imageUrl = '', prompt = '' }) => {
   if (!prompt) throw new Error('Không có prompt tạo Sticker Master.')
 
+  logOutgoingPrompt('createStickerMaster', prompt)
+
   // Read source image (support file or URL) — previous code referenced undefined `mimeType`/`base64`
   const { base64, mimeType } = await sourceImageToBase64({ file, imageUrl })
 
@@ -549,6 +568,8 @@ export const createStickerMaster = async ({ file = null, imageUrl = '', prompt =
 export const analyzeStickerImage = async ({ file = null, imageUrl = '', prompt = '' }) => {
   if (!prompt) throw new Error('Không có prompt để analyze Sticker.')
 
+  // logOutgoingPrompt('analyzeStickerImage', prompt)
+
   const { base64 } = await sourceImageToBase64({ file, imageUrl })
 
   const payload = {
@@ -558,6 +579,7 @@ export const analyzeStickerImage = async ({ file = null, imageUrl = '', prompt =
   },
     "text": prompt,
   }
+  console.log('Lập tesst', payload)
 
   const data = await callBackend('/vertex/sticker/analyze', payload)
 
@@ -584,6 +606,8 @@ export const analyzeComboImage = async ({ file = null, imageUrl = '', targetOutp
   ]
     .filter(Boolean)
     .join('\n')
+
+  logOutgoingPrompt('analyzeComboImage', analysisPrompt)
 
   const payload = {
     user_id: userId,
@@ -651,6 +675,8 @@ export const generateComboStickerImage = async ({
   ]
     .filter(Boolean)
     .join('\n')
+
+  logOutgoingPrompt('generateComboStickerImage', fullPrompt)
 
   const payload = {
     user_id: userId,
@@ -772,6 +798,8 @@ export const generateLifestyleImage = async ({ file = null, imageUrl = '', keywo
     analysis_count: 3,
   }
 
+  logOutgoingPrompt('generateLifestyleImage.analyze', PROMPTS.lifestyleAnalyze)
+
   const analyzeData = await callBackend('/vertex/lifestyle/analyze', analyzePayload)
   const analyses = extractAnalysesFromResponse(analyzeData)
 
@@ -785,6 +813,8 @@ export const generateLifestyleImage = async ({ file = null, imageUrl = '', keywo
     analyses.map(async (analysisItem) => {
       const insight = extractInsightFromAnalysis(analysisItem?.analysis || analysisItem)
       const generatePrompt = buildLifestyleGeneratePrompt(keyword, insight)
+
+      logOutgoingPrompt('generateLifestyleImage.generate', generatePrompt)
 
 
       const genPayload = {

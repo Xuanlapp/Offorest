@@ -114,3 +114,5 @@ The final generated sticker must be exactly one sticker with a transparent backg
 
 Output only one plain natural-language prompt string, with no JSON, no code block, and no extra explanation. The prompt must explicitly state that it is one sticker, in vector style, sharp resolution, transparent background, thick outlines, square composition, and fully visible without cropping. The wording should be direct, clear, descriptive, and sound like a confident art director briefing an AI designer to create a single premium-quality sticker`
 }
+
+export const PROMPT_DEFAULTS: Record<string, string> = { ...PROMPTS }

@@ -3,8 +3,14 @@ import { getCurrentUser } from '../services/authService'
 import { redesignImage, generateLifestyleImage } from '../services/geminiService'
 import { getSheetUrlForPage } from '../services/sheetConfigService'
 import { updateDesignPageImages } from '../services/googleDriveService'
-import { PROMPTS } from '../prompt/Prompts'
+import { PROMPTS, PROMPT_DEFAULTS } from '../prompt/Prompts'
+import {
+  getPromptsMoiPath,
+  removePromptFromPromptsMoi,
+  savePromptToPromptsMoi,
+} from '../prompt/PromptsMoiService'
 import ImagePreviewEditorModal from '../components/ImagePreviewEditorModal'
+import PromptEditorModal from '../components/PromptEditorModal'
 
 export default function SuncatcherPage() {
   const [isLoading, setIsLoading] = useState(false)
@@ -19,6 +25,8 @@ export default function SuncatcherPage() {
   const [uploadStatus, setUploadStatus] = useState({})
   const [lifestyleResults, setLifestyleResults] = useState({})
   const [editorState, setEditorState] = useState(null)
+  const [showPromptEditor, setShowPromptEditor] = useState(false)
+  const [suncatcherPrompt, setSuncatcherPrompt] = useState(() => PROMPTS.suncatcher)
 
   const totalPages = Math.max(1, Math.ceil(data.length / pageSize))
 
@@ -254,7 +262,7 @@ export default function SuncatcherPage() {
     }))
 
     try {
-      const result = await redesignImage(imageLink,  PROMPTS.suncatcher)
+      const result = await redesignImage(imageLink, suncatcherPrompt)
       setRedesignResults((prev) => ({
         ...prev,
         [globalIndex]: { loading: false, base64: result.base64, mimeType: result.mimeType, error: null },
@@ -557,6 +565,43 @@ export default function SuncatcherPage() {
 
   return (
     <section className="rounded-2xl border border-zinc-200 bg-zinc-100/95 p-6 text-zinc-800">
+        <PromptEditorModal
+          isOpen={showPromptEditor}
+          title="Change Prompt - Suncatcher"
+          description="Chinh sua prompt dang dung cho Suncatcher page. Save de ap dung ngay cho lan tao tiep theo."
+          fields={[
+            {
+              key: 'suncatcherPrompt',
+              label: 'Suncatcher Prompt',
+              value: suncatcherPrompt,
+              oldValue: PROMPT_DEFAULTS.suncatcher,
+              rows: 14,
+            },
+          ]}
+          onClose={() => setShowPromptEditor(false)}
+          onSave={async (values) => {
+            const nextPrompt = String(values.suncatcherPrompt ?? '')
+            setSuncatcherPrompt(nextPrompt)
+            try {
+              await savePromptToPromptsMoi('suncatcher', nextPrompt)
+              const filePath = await getPromptsMoiPath()
+              if (filePath) {
+                alert(`Da luu prompt vao:\n${filePath}`)
+              }
+            } catch (error) {
+              alert(error?.message || 'Khong the luu prompt vao PromptsMoi.ts')
+            }
+          }}
+          onReset={async () => {
+            setSuncatcherPrompt(PROMPT_DEFAULTS.suncatcher)
+            PROMPTS.suncatcher = PROMPT_DEFAULTS.suncatcher
+            try {
+              await removePromptFromPromptsMoi('suncatcher')
+            } catch (error) {
+              alert(error?.message || 'Khong the reset prompt trong PromptsMoi.ts')
+            }
+          }}
+        />
         {editorState ? (
           <ImagePreviewEditorModal
             asset={{
@@ -585,6 +630,13 @@ export default function SuncatcherPage() {
           Design Workspace ({data.length} Items)
         </h2>
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowPromptEditor(true)}
+            className="rounded-lg border border-indigo-300 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-600 hover:bg-indigo-50"
+          >
+            Change Prompt
+          </button>
           <span className="rounded-full border border-zinc-300 bg-white px-4 py-1.5 text-xs font-medium text-zinc-600">
             Ready for AI Processing
           </span>
