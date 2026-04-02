@@ -50,6 +50,15 @@
   "build": {
     "appId": "com.offorest.desktop",
     "productName": "Offorest",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Xuanlapp",
+        "repo": "Offorest",
+        "private": false,
+        "releaseType": "release"
+      }
+    ],
     "directories": {
       "output": "release"
     },
@@ -62,6 +71,9 @@
     "win": {
       "target": "nsis",
       "signAndEditExecutable": false
+    },
+    "nsis": {
+      "artifactName": "Offorest-Setup-${version}.${ext}"
     },
     "mac": {
       "target": [
