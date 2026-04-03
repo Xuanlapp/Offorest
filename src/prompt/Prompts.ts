@@ -106,13 +106,63 @@ export const PROMPTS: Record<string, string> = {
 Remove all logos, brand marks, and original printed text from the image.
 Do not recreate or replace them with similar elements.
 The surface must contain only the newly redesigned subject. SUBJECT REDESIGN (CRITICAL) You MUST redesign the original subject. Do NOT reuse or copy the original artwork. The new subject must be a redesigned version of the original. SUBJECT CATEGORY RULE (MANDATORY) Person → must remain a person Animal → must remain the same type of animal Object → must remain an object NO category transformation REDESIGN LIMITS You may adjust: pose outfit expression visual presentation (still photorealistic) Do NOT change the core identity STRICT NEGATIVE RULES No additional subjects No extra animals No props No background elements No scene expansion STYLE CONTROL Photorealistic Natural lighting Real textures NOT cartoon, NOT illustration OUTPUT Single image only High resolution, print-ready No watermark, no text, no border,`,
-  sticker: `You are a creative visual-intelligence AI assistant whose main function is to craft one clear, vivid, and well-structured image-generation prompt for producing a single sticker design. This prompt must be based on a thorough visual and emotional analysis of one provided reference image only.
+  sticker: `Here is the enhanced version of your prompt in English. I have refined the technical terminology to ensure AI models (like Midjourney, DALL-E 3, or Stable Diffusion) understand the deep style analysis and the strict isolation of the main subject.
 
-Your task is to examine one input product image and determine whether it is an actual sticker product. If it is, identify the main subject, supporting elements, color palette, emotional tone, visual language, composition, outline treatment, and any text that appears in the design. Base your output only on the characteristics visible in this single reference image, and do not combine traits from imagined or external examples.
+Advanced Meta-Prompt: Deep Subject Analysis & Style Evolution
+System Task: You are an expert Visual Forensic Artist and Sticker Designer. You will process the uploaded image through a strict 3-step technical synthesis to create a unique, production-ready sticker prompt.
 
-The final generated sticker must be exactly one sticker with a transparent background, bold thick outlines, vector-style sharpness and clarity, and a complete composition that fits neatly within a square ratio with nothing cropped, cut off, or missing. Keep the design clean, balanced, print-ready, and visually strong for Print-on-Demand use. Do not add unnecessary background scenery or unrelated decorative elements. If the original sticker contains text, preserve that text exactly as shown, without translating, paraphrasing, correcting, or modifying it in any way.
+STEP 1: DEEP ANATOMICAL SCAN (MAIN SUBJECT ONLY)
+Action: Isolate the main subject and completely ignore the background or any surrounding scenery. Conduct an exhaustive analysis of the following:
 
-Output only one plain natural-language prompt string, with no JSON, no code block, and no extra explanation. The prompt must explicitly state that it is one sticker, in vector style, sharp resolution, transparent background, thick outlines, square composition, and fully visible without cropping. The wording should be direct, clear, descriptive, and sound like a confident art director briefing an AI designer to create a single premium-quality sticker`
+Micro-Style Identification: Determine the exact artistic DNA of the main subject only. Classify it into one of these categories with visual evidence:
+
+Realistic: Photographic detail, natural lighting, tangible textures (skin, fabric, fur).
+
+Hand-drawn: Visible brushstrokes, ink hatching, pencil textures, or watercolor bleeding.
+
+Cartoon/Anime/Illustration: Clean line art, cel-shading or smooth gradients, stylized proportions.
+
+Graphic/Vector: Geometric shapes, limited color palette, sharp edges, iconic/symbolic nature.
+
+Others: (e.g., Pixel Art, Synthwave, Ukiyo-e, etc.)
+
+Subject Core DNA:
+
+Exact Silhouette: Lock the original shape, pose, and structural outline.
+
+Facial Expression: Identify the specific emotion (smug, fierce, joyful, etc.).
+
+Color Palette: Extract the primary colors used specifically on the subject.
+
+Text Preservation: Identify any text or characters directly attached to or held by the subject. This text must be locked for 100% exact reproduction.
+
+STEP 2: CONCEPTUAL EVOLUTION (NO BACKGROUND)
+Action: Conceptualize a commercial-grade sticker based on Step 1. The concept must remain instantly recognizable as the original character/object but must follow these constraints:
+
+Zero Background: The concept exists in a void, focusing entirely on the subject’s silhouette.
+
+Style Fidelity: Maintain the "soul" of the artistic style identified in Step 1.
+
+Text Integration: Keep the original wording/characters exactly as they appear.
+
+STEP 3: FINAL PRODUCTION PROMPT GENERATION
+Action: Generate one single, comprehensive natural-language prompt for a high-quality sticker. The prompt must include:
+
+Visual Style: High-quality sticker art, clean die-cut aesthetics, bold outlines (sticker-style). Even if the source is Realistic or Hand-drawn, the final output must be optimized for a "Sticker" look while retaining the original style's essence.
+
+The "5-Point Difference" Rule: To ensure a unique transformative work, include exactly 5 subtle visual modifications (e.g., changing a small accessory, altering a clothing pattern, tweaking eye-light reflections, modifying a hair strand, or adding a micro-texture) without losing the subject's identity.
+
+Compositional Requirements:
+
+Subject: Centered, full body or main bust fully visible, no cropping.
+Background: Strictly 100% solid white background.
+
+Edges: Professional thick white border (die-cut style) around the subject's silhouette.
+
+Quality: High resolution, sharp focus, vibrant colors, vector-like cleanliness.
+
+OUTPUT INSTRUCTION:
+Produce ONLY the final natural-language prompt derived from Step 3. Do not show Step 1 or 2. No JSON, no preamble. Start the prompt immediately.`
 }
 
 export const PROMPT_DEFAULTS: Record<string, string> = { ...PROMPTS }

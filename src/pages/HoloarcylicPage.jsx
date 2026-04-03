@@ -1,5 +1,4 @@
 import { useMemo, useState, useEffect } from 'react'
-import { getCurrentUser } from '../services/authService'
 import { redesignImage, generateLifestyleImage } from '../services/geminiService'
 import { getSheetUrlForPage } from '../services/sheetConfigService'
 import { updateDesignPageImages } from '../services/googleDriveService'
@@ -30,6 +29,7 @@ export default function HoloarcylicPage() {
   const [uploadStatus, setUploadStatus] = useState({})
   const [lifestyleResults, setLifestyleResults] = useState({})
   const [editorState, setEditorState] = useState(null)
+  const [editorPreviewHistory, setEditorPreviewHistory] = useState({})
   const [showPromptEditor, setShowPromptEditor] = useState(false)
   const [holoPrompt, setHoloPrompt] = useState(() => PROMPTS.holographicOrnament)
   const productNames = useMemo(() => {
@@ -194,9 +194,52 @@ export default function HoloarcylicPage() {
     lastModified: file?.lastModified || null,
   })
 
-  const handleApplyEditorChanges = async ({ dataUrl }) => {
+  const buildEditorPreviewKey = (kind, globalIndex, imageIndex = 'root') =>
+    `${kind}:${globalIndex}:${imageIndex}`
+
+  const mergePreviewOptions = (baseOptions = [], historyOptions = []) => {
+    const seen = new Set()
+    return [...baseOptions, ...historyOptions]
+      .filter((option) => option?.src)
+      .filter((option) => {
+        if (seen.has(option.src)) return false
+        seen.add(option.src)
+        return true
+      })
+      .map((option, index) => ({
+        id: `${String(option.id || 'preview').replace(/\s+/g, '-')}-${index + 1}`,
+        label: option.label || `Preview ${index + 1}`,
+        src: option.src,
+      }))
+  }
+
+  const clearEditorPreviewHistoryForItem = (globalIndex) => {
+    setEditorPreviewHistory((prev) => {
+      const next = { ...prev }
+      Object.keys(next).forEach((key) => {
+        if (key.includes(`:${globalIndex}:`)) {
+          delete next[key]
+        }
+      })
+      return next
+    })
+  }
+
+  const handleApplyEditorChanges = async ({ dataUrl, previewOptions = [] }) => {
     if (!editorState) {
       return
+    }
+
+    const currentEditorKey = buildEditorPreviewKey(
+      editorState.kind,
+      editorState.globalIndex,
+      editorState.imageIndex
+    )
+    if (previewOptions.length) {
+      setEditorPreviewHistory((prev) => ({
+        ...prev,
+        [currentEditorKey]: previewOptions,
+      }))
     }
 
     const payload = dataUrlToImagePayload(dataUrl)
@@ -217,6 +260,7 @@ export default function HoloarcylicPage() {
         delete next[editorState.globalIndex]
         return next
       })
+      clearEditorPreviewHistoryForItem(editorState.globalIndex)
       return
     }
 
@@ -271,6 +315,22 @@ export default function HoloarcylicPage() {
         }
       })
     }
+  }
+
+  const handlePersistEditorPreviewOptions = (previewOptions = []) => {
+    if (!editorState || !previewOptions.length) {
+      return
+    }
+
+    const currentEditorKey = buildEditorPreviewKey(
+      editorState.kind,
+      editorState.globalIndex,
+      editorState.imageIndex
+    )
+    setEditorPreviewHistory((prev) => ({
+      ...prev,
+      [currentEditorKey]: previewOptions,
+    }))
   }
 
   const handleCreateMaster = async (globalIndex, imageLink) => {
@@ -488,28 +548,7 @@ export default function HoloarcylicPage() {
       const redesignBlob = await fetch(redesignSrc).then((r) => r.blob())
       const redesignFile = new File([redesignBlob], `holoarcylic-redesign-${globalIndex}.png`, { type: 'image/png' })
 
-      console.log('🚀 [HoloarcylicPage] Starting single image upload', {
-        globalIndex,
-        keyword: row?.keyword || null,
-        stt,
-        sourceImageLink: row?.imageLink || null,
-        redesignImage: {
-          mimeType: redesign?.mimeType || null,
-          base64Length: redesign?.base64?.length || 0,
-        },
-        lifestylePreviewCount: getLifestylePreviewImages(lifestyleResults[globalIndex]).length,
-      })
-
-      console.log('📤 [HoloarcylicPage] Single update payload', {
-        globalIndex,
-        sheetId,
-        gid,
-        stt,
-        keyword: row?.keyword || null,
-        redesignFile: summarizeFileForLog(redesignFile),
-        lifestyleFiles: lifestyleFiles.map(summarizeFileForLog),
-        accessTokenPreview: accessToken ? accessToken.substring(0, 20) + '...' : null,
-      })
+      
 
       const response = await updateDesignPageImages({
         sheetId,
@@ -521,13 +560,7 @@ export default function HoloarcylicPage() {
         pageKey: 'holoarcylic',
       })
 
-      console.log('✅ [HoloarcylicPage] Single image upload success', {
-        globalIndex,
-        keyword: row?.keyword || null,
-        stt,
-        response,
-      })
-
+     
       setUploadStatus((prev) => ({ ...prev, [globalIndex]: 'done' }))
     } catch (err) {
       console.error('❌ [HoloarcylicPage] Single image upload failed', {
@@ -580,13 +613,8 @@ export default function HoloarcylicPage() {
     let successCount = 0
     let errorCount = 0
 
-    console.log('🚀 [HoloarcylicPage] Starting batch image upload', {
-      selectedCount: selectedItems.size,
-      selectedIndexes: Array.from(selectedItems),
-      sheetId,
-      gid,
-      accessTokenPreview: accessToken ? accessToken.substring(0, 20) + '...' : null,
-    })
+ 
+    
 
     // Upload each selected item
     for (const globalIndex of Array.from(selectedItems)) {
@@ -609,28 +637,8 @@ export default function HoloarcylicPage() {
         const redesignBlob = await fetch(redesignSrc).then((r) => r.blob())
         const redesignFile = new File([redesignBlob], `holoarcylic-redesign-${globalIndex}.png`, { type: 'image/png' })
 
-        console.log('🧾 [HoloarcylicPage] Batch item prepared', {
-          globalIndex,
-          keyword: row?.keyword || null,
-          stt,
-          sourceImageLink: row?.imageLink || null,
-          redesignImage: {
-            mimeType: redesign?.mimeType || null,
-            base64Length: redesign?.base64?.length || 0,
-          },
-          lifestylePreviewCount: getLifestylePreviewImages(lifestyleResults[globalIndex]).length,
-        })
 
-        console.log('📤 [HoloarcylicPage] Batch update payload', {
-          globalIndex,
-          sheetId,
-          gid,
-          stt,
-          keyword: row?.keyword || null,
-          redesignFile: summarizeFileForLog(redesignFile),
-          lifestyleFiles: lifestyleFiles.map(summarizeFileForLog),
-          accessTokenPreview: accessToken ? accessToken.substring(0, 20) + '...' : null,
-        })
+        
 
         const response = await updateDesignPageImages({
           sheetId,
@@ -642,32 +650,18 @@ export default function HoloarcylicPage() {
           pageKey: 'holoarcylic',
         })
 
-        console.log('✅ [HoloarcylicPage] Batch item upload success', {
-          globalIndex,
-          keyword: row?.keyword || null,
-          stt,
-          response,
-        })
+      
 
         successCount += 1
         setUploadStatus((prev) => ({ ...prev, [globalIndex]: 'done' }))
       } catch (err) {
-        console.error('❌ [HoloarcylicPage] Batch item upload failed', {
-          globalIndex,
-          keyword: data[globalIndex]?.keyword || null,
-          stt: data[globalIndex]?.stt ?? (globalIndex + 1),
-          error: err,
-        })
+       
         errorCount += 1
         setUploadStatus((prev) => ({ ...prev, [globalIndex]: 'error' }))
       }
     }
 
-    console.log('🏁 [HoloarcylicPage] Batch image upload completed', {
-      selectedCount: selectedItems.size,
-      successCount,
-      errorCount,
-    })
+  
 
     setIsUploading(false)
     alert('Upload hoàn tất!')
@@ -719,9 +713,11 @@ export default function HoloarcylicPage() {
               src: editorState.src,
               title: editorState.title,
               description: editorState.description,
+              previewOptions: editorState.previewOptions,
             }}
             onClose={() => setEditorState(null)}
             onApply={handleApplyEditorChanges}
+            onPreviewOptionsChange={handlePersistEditorPreviewOptions}
           />
         ) : null}
         {isLoading && (
@@ -799,6 +795,34 @@ export default function HoloarcylicPage() {
               const redesign = redesignResults[globalIndex]
               const lifestyle = lifestyleResults[globalIndex]
               const lifestylePreviewImages = getLifestylePreviewImages(lifestyle)
+              const redesignDataUrl = redesign?.base64
+                ? `data:${redesign.mimeType || 'image/png'};base64,${redesign.base64}`
+                : ''
+              const editorPreviewOptions = [
+                ...(redesignDataUrl ? [{ id: 'redesign', label: 'Redesign', src: redesignDataUrl }] : []),
+                ...lifestylePreviewImages
+                  .filter((image) => image?.base64)
+                  .map((image, imageIndex) => ({
+                    id: `lifestyle-${imageIndex}`,
+                    label: `Lifestyle ${imageIndex + 1}`,
+                    src: `data:${image.mimeType || 'image/png'};base64,${image.base64}`,
+                  })),
+              ]
+              const sourceEditorPreviewOptions = mergePreviewOptions(
+                editorPreviewOptions,
+                editorPreviewHistory[buildEditorPreviewKey('source', globalIndex)] || []
+              )
+              const redesignEditorPreviewOptions = mergePreviewOptions(
+                editorPreviewOptions,
+                editorPreviewHistory[buildEditorPreviewKey('redesign', globalIndex)] || []
+              )
+              const getLifestyleEditorPreviewOptions = (imageIndex) =>
+                mergePreviewOptions(
+                  editorPreviewOptions,
+                  editorPreviewHistory[
+                    buildEditorPreviewKey('lifestyle', globalIndex, imageIndex)
+                  ] || []
+                )
 
               return (
                 <article
@@ -869,6 +893,7 @@ export default function HoloarcylicPage() {
                                 src: row.imageLink,
                                 title: row.keyword || `Source ${itemNumber}`,
                                 description: 'Ảnh gốc sau khi lưu sẽ thay thế nguồn hiện tại và reset các ảnh đã tạo từ nguồn cũ.',
+                                previewOptions: sourceEditorPreviewOptions,
                               })
                             }
                           />
@@ -909,9 +934,10 @@ export default function HoloarcylicPage() {
                               setEditorState({
                                 kind: 'redesign',
                                 globalIndex,
-                                src: `data:${redesign.mimeType};base64,${redesign.base64}`,
+                                src: redesignDataUrl,
                                 title: `${row.keyword || `Item ${itemNumber}`} redesign`,
                                 description: 'Lưu chỉnh sửa sẽ cập nhật ảnh redesign hiện tại và reset lifestyle để tránh lệch dữ liệu.',
+                                previewOptions: redesignEditorPreviewOptions,
                               })
                             }
                           />
@@ -968,6 +994,7 @@ export default function HoloarcylicPage() {
                                       src: `data:${image.mimeType || 'image/png'};base64,${image.base64}`,
                                       title: `${row.keyword || `Item ${itemNumber}`} lifestyle ${imageIndex + 1}`,
                                       description: 'Ảnh lifestyle sau khi lưu sẽ thay trực tiếp vào ô preview hiện tại.',
+                                      previewOptions: getLifestyleEditorPreviewOptions(imageIndex),
                                     })
                                   }
                                 />

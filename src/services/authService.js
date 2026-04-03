@@ -6,6 +6,8 @@ const ROLE_PERMISSIONS = {
     PERMISSIONS.HOLOARCYLIC_VIEW,
     PERMISSIONS.COMBO_STICKER_VIEW,
     PERMISSIONS.REDESIGN_VIEW,
+    PERMISSIONS.STICKER_VIEW,
+    PERMISSIONS.ADMIN_VIEW,
   ],
   design: [
     PERMISSIONS.HOLOARCYLIC_VIEW,
@@ -39,6 +41,12 @@ const PRODUCT_PERMISSION_MAP = {
   redesign: PERMISSIONS.REDESIGN_VIEW,
 }
 
+const PRODUCT_ID_MAP = {
+  1: { code: 'sticker', path: APP_MODES.sticker?.path, permission: PERMISSIONS.STICKER_VIEW },
+  2: { code: 'ornament', path: APP_MODES.holoornament?.path, permission: PERMISSIONS.HOLOARCYLIC_VIEW },
+  3: { code: 'suncatcher', path: APP_MODES.suncatcher?.path, permission: PERMISSIONS.HOLOARCYLIC_VIEW },
+}
+
 const PRODUCT_PATH_MAP = {
   sticker: APP_MODES.sticker?.path,
   combosticker: APP_MODES.combosticker?.path,
@@ -62,6 +70,72 @@ const buildPermissionsFromProducts = (products = []) => {
   return [...new Set(mapped)]
 }
 
+const normalizeProductItems = (value = []) => {
+  if (!Array.isArray(value)) return []
+
+  return value
+    .map((item) => {
+      if (typeof item === 'number') {
+        const mapped = PRODUCT_ID_MAP[item]
+        return mapped ? { id: item, code: mapped.code, path: mapped.path } : null
+      }
+
+      if (typeof item === 'string') {
+        const code = normalizeProductCode(item)
+        return { code, path: PRODUCT_PATH_MAP[code] || null }
+      }
+
+      if (item && typeof item === 'object') {
+        const id = Number(item.id ?? item.product_type_id ?? item.productTypeId ?? item.value ?? 0) || null
+        const code = normalizeProductCode(item.code || item.slug || item.name || item.label || '')
+        const mappedFromId = id ? PRODUCT_ID_MAP[id] : null
+
+        return {
+          id,
+          code: code || mappedFromId?.code || '',
+          path: mappedFromId?.path || PRODUCT_PATH_MAP[code] || null,
+        }
+      }
+
+      return null
+    })
+    .filter(Boolean)
+}
+
+const getProductTypesFromApiUser = (apiUser = {}, data = {}) => {
+  const directProducts = Array.isArray(data?.products) ? data.products : []
+  const directProductTypes = Array.isArray(apiUser?.product_types)
+    ? apiUser.product_types
+    : Array.isArray(data?.product_types)
+      ? data.product_types
+      : []
+  const directProductTypeIds = Array.isArray(apiUser?.product_type_ids)
+    ? apiUser.product_type_ids
+    : Array.isArray(data?.product_type_ids)
+      ? data.product_type_ids
+      : []
+
+  const normalizedFromObjects = normalizeProductItems(directProducts)
+  const normalizedFromTypes = normalizeProductItems(directProductTypes)
+  const normalizedFromIds = normalizeProductItems(directProductTypeIds)
+
+  return [...normalizedFromObjects, ...normalizedFromTypes, ...normalizedFromIds]
+}
+
+export const getFirstProductPath = (userOrProducts = []) => {
+  const products = Array.isArray(userOrProducts)
+    ? userOrProducts
+    : getProductTypesFromApiUser(userOrProducts, userOrProducts)
+
+  if (!products.length) return '/no-permission'
+
+  const firstProduct = products[0]
+  const firstProductId = Number(firstProduct?.id || firstProduct?.product_type_id || 0)
+  const firstProductCode = normalizeProductCode(firstProduct?.code || firstProduct?.slug || firstProduct?.name || '')
+
+  return PRODUCT_ID_MAP[firstProductId]?.path || PRODUCT_PATH_MAP[firstProductCode] || '/no-permission'
+}
+
 export const login = async (username, password) => {
   try {
     const response = await fetch(`${API_BASE_URL}/auth/login`, {
@@ -79,7 +153,7 @@ export const login = async (username, password) => {
     }
 
     const apiUser = data?.user || {}
-    const products = Array.isArray(data?.products) ? data.products : []
+    const products = getProductTypesFromApiUser(apiUser, data)
     const permissions = buildPermissionsFromProducts(products)
 
     const user = {
@@ -89,8 +163,13 @@ export const login = async (username, password) => {
       email: apiUser.email || data.email || '',
       role: apiUser.role_code || data.role || 'user',
       status: apiUser.status,
+      role_code: apiUser.role_code || data.role || 'user',
       token: data.token || data.access_token,
       products,
+      product_types: products,
+      product_type_ids: products
+        .map((item) => Number(item?.id || item?.product_type_id || 0))
+        .filter(Boolean),
       permissions,
     }
     localStorage.setItem('user', JSON.stringify(user))
@@ -110,36 +189,34 @@ export const getCurrentUser = () => {
   if (!userStr) return null
 
   const user = JSON.parse(userStr)
-  const productPermissions = buildPermissionsFromProducts(user.products)
+  const products = getProductTypesFromApiUser(user, user)
+  const productPermissions = buildPermissionsFromProducts(products)
+  const rolePermissions = ROLE_PERMISSIONS[String(user.role_code || user.role || '').toLowerCase()] || []
 
   return {
     ...user,
-    permissions: productPermissions,
+    products,
+    product_types: products,
+    permissions: [...new Set([...productPermissions, ...rolePermissions])],
   }
 }
 
 export const getDefaultPathForUser = (user) => {
   if (!user) return '/login'
 
-  const products = Array.isArray(user?.products) ? user.products : []
+  const roleCode = String(user?.role_code || user?.role || '').toLowerCase()
+  if (roleCode === 'admin') {
+    return '/admin'
+  }
+
+  const products = getProductTypesFromApiUser(user, user)
   const productPermissions = buildPermissionsFromProducts(products)
 
   if (!products.length || !productPermissions.length) {
     return '/no-permission'
   }
 
-  if (products.length > 0) {
-    const firstProductCode = normalizeProductCode(products[0]?.code || '')
-    const firstProductPath = PRODUCT_PATH_MAP[firstProductCode]
-
-    if (firstProductPath) {
-      return firstProductPath
-    }
-
-    return '/no-permission'
-  }
-
-  return '/no-permission'
+  return getFirstProductPath(products)
 }
 
 export const isAuthenticated = () => {

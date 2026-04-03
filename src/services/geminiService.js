@@ -206,9 +206,6 @@ const callLocalBackend = async (endpoint, payload) => {
 
 const logOutgoingPrompt = (label, promptText) => {
   const normalizedPrompt = String(promptText || '')
-  console.groupCollapsed(`[Prompt Sent] ${label}`)
-  console.log(normalizedPrompt)
-  console.groupEnd()
 
   if (typeof window !== 'undefined') {
     window.__OFFOREST_LAST_PROMPT__ = {
@@ -517,6 +514,65 @@ export const redesignImage = async (imageUrl, prompt) => {
   }
 }
 
+/**
+ * Custom edit image từ dataUrl (ảnh đã chỉnh sửa) + prompt
+ * Gửi ảnh hiện tại + ý kiến chỉnh sửa của user tới Gemini
+ *
+ * @param {string} dataUrl   - Ảnh dạng data URL (đã được chỉnh sửa)
+ * @param {string} prompt    - Ý kiến/hướng dẫn chỉnh sửa từ user
+ * @returns {Promise<{base64: string, mimeType: string}>}
+ */
+export const customEditImageFromDataUrl = async (dataUrl, prompt) => {
+  if (!dataUrl) throw new Error('Không có ảnh để chỉnh sửa.')
+  if (!prompt || !prompt.trim()) throw new Error('Vui lòng nhập ý kiến chỉnh sửa ảnh.')
+
+  logOutgoingPrompt('customEditImageFromDataUrl', prompt)
+
+  // Extract base64 và mimeType từ dataUrl
+  const parts = dataUrlToParts(dataUrl)
+  const { data: base64, mimeType } = parts.inlineData
+
+  // Build Gemini format payload
+  const payload = {
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          {
+            inlineData: {
+              mimeType,
+              data: base64,
+            },
+          },
+          {
+            text: prompt,
+          },
+        ],
+      },
+    ],
+    generationConfig: {
+      responseModalities: ['IMAGE', 'TEXT'],
+      imageConfig: {
+        aspectRatio: '1:1',
+        image_size: '1K',
+      },
+    },
+  }
+
+  const data = await callBackend('/vertex/ornament', payload)
+
+  const extracted = extractImageResult(data)
+  if (!extracted?.base64) {
+    console.error('❌ [geminiService] Backend response without usable image:', data)
+    throw new Error('Backend không trả về ảnh. Thử lại hoặc kiểm tra quota API.')
+  }
+
+  return {
+    base64: extracted.base64,
+    mimeType: extracted.mimeType,
+  }
+}
+
 export const createStickerMaster = async ({ file = null, imageUrl = '', prompt = '' }) => {
   if (!prompt) throw new Error('Không có prompt tạo Sticker Master.')
 
@@ -579,7 +635,6 @@ export const analyzeStickerImage = async ({ file = null, imageUrl = '', prompt =
   },
     "text": prompt,
   }
-  console.log('Lập tesst', payload)
 
   const data = await callBackend('/vertex/sticker/analyze', payload)
 
@@ -868,6 +923,7 @@ export default {
   generateLifestyleImage,
   redesignImage,
   redesignImageBatch,
+  customEditImageFromDataUrl,
   sourceImageToBase64,
   dataUrlToParts,
 }

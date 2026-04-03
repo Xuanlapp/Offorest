@@ -3,7 +3,7 @@ import MainLayout from './layouts/MainLayout'
 import LoginPage from './pages/LoginPage'
 import NoPermissionPage from './pages/NoPermissionPage'
 import { APP_MODES } from './config/nav.modes'
-import { getDefaultPathForUser, hasPermission } from './services/authService'
+import { getDefaultPathForUser, hasPermission, isAuthenticated } from './services/authService'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 
 const pageModules = import.meta.glob('./pages/*Page.jsx', { eager: true })
@@ -56,7 +56,7 @@ function PersistedModePages({ user, appModeList, defaultPath }) {
 
 function AppRoutes() {
   const { user } = useAuth()
-  const authenticated = user !== null
+  const authenticated = user !== null || isAuthenticated()
   const defaultPath = getDefaultPathForUser(user)
   const appModeList = Object.values(APP_MODES)
 

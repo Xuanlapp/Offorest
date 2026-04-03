@@ -24,7 +24,9 @@ export default function StickerPage() {
 	const [uploadStatus, setUploadStatus] = useState({})
 	const [selectedItems, setSelectedItems] = useState({})
 	const [isBatchUploading, setIsBatchUploading] = useState(false)
+	const [isBatchCreating, setIsBatchCreating] = useState(false)
 	const [editorState, setEditorState] = useState(null)
+	const [editorPreviewHistory, setEditorPreviewHistory] = useState({})
 	const [showPromptEditor, setShowPromptEditor] = useState(false)
 	const [stickerPrompt, setStickerPrompt] = useState(() => PROMPTS.sticker)
 
@@ -50,13 +52,6 @@ export default function StickerPage() {
 		[selectedItems]
 	)
 
-	const currentPageReadyCount = useMemo(() => {
-		return paginatedData.filter((_, idx) => {
-			const globalIndex = (currentPage - 1) * pageSize + idx
-			return !!masterResults[globalIndex]?.base64
-		}).length
-	}, [paginatedData, currentPage, pageSize, masterResults])
-
 	const selectedReadyCount = useMemo(() => {
 		return Object.keys(selectedItems).filter((index) => {
 			if (!selectedItems[index]) return false
@@ -64,22 +59,14 @@ export default function StickerPage() {
 		}).length
 	}, [selectedItems, masterResults])
 
-	useEffect(() => {
-		setSelectedItems((prev) => {
-			let changed = false
-			const next = { ...prev }
+	const currentPageSelectedCount = useMemo(() => {
+		return paginatedData.filter((_, idx) => {
+			const globalIndex = (currentPage - 1) * pageSize + idx
+			return !!selectedItems[globalIndex]
+		}).length
+	}, [paginatedData, currentPage, pageSize, selectedItems])
 
-			Object.keys(next).forEach((index) => {
-				if (!next[index]) return
-				if (!masterResults[Number(index)]?.base64) {
-					next[index] = false
-					changed = true
-				}
-			})
-
-			return changed ? next : prev
-		})
-	}, [masterResults])
+	const isCurrentPageFullySelected = paginatedData.length > 0 && currentPageSelectedCount === paginatedData.length
 
 	const normalizeHeader = (text) =>
 		String(text || '')
@@ -163,6 +150,123 @@ export default function StickerPage() {
 		return new File([blob], fileName, { type: blob.type || fallbackMimeType })
 	}
 
+	const dataUrlToImagePayload = (dataUrl) => {
+		const match = dataUrl.match(/^data:(.*?);base64,(.*)$/)
+		if (!match) {
+			throw new Error('Dữ liệu ảnh không hợp lệ')
+		}
+
+		return {
+			mimeType: match[1] || 'image/png',
+			base64: match[2],
+		}
+	}
+
+	const buildEditorPreviewKey = (kind, globalIndex, imageIndex = 'root') =>
+		`${kind}:${globalIndex}:${imageIndex}`
+
+	const mergePreviewOptions = (baseOptions = [], historyOptions = []) => {
+		const seen = new Set()
+		return [...baseOptions, ...historyOptions]
+			.filter((option) => option?.src)
+			.filter((option) => {
+				if (seen.has(option.src)) return false
+				seen.add(option.src)
+				return true
+			})
+			.map((option, index) => ({
+				id: `${String(option.id || 'preview').replace(/\s+/g, '-')}-${index + 1}`,
+				label: option.label || `Preview ${index + 1}`,
+				src: option.src,
+			}))
+	}
+
+	const clearEditorPreviewHistoryForItem = (globalIndex) => {
+		setEditorPreviewHistory((prev) => {
+			const next = { ...prev }
+			Object.keys(next).forEach((key) => {
+				if (key.includes(`:${globalIndex}:`)) {
+					delete next[key]
+				}
+			})
+			return next
+		})
+	}
+
+	const handleApplyEditorChanges = async ({ dataUrl, previewOptions = [] }) => {
+		if (!editorState) {
+			return
+		}
+
+		const currentEditorKey = buildEditorPreviewKey(
+			editorState.kind,
+			editorState.globalIndex,
+			editorState.imageIndex
+		)
+		if (previewOptions.length) {
+			setEditorPreviewHistory((prev) => ({
+				...prev,
+				[currentEditorKey]: previewOptions,
+			}))
+		}
+
+		const payload = dataUrlToImagePayload(dataUrl)
+
+		if (editorState.kind === 'source') {
+			setData((prev) =>
+				prev.map((row, index) =>
+					index === editorState.globalIndex ? { ...row, imageLink: dataUrl } : row
+				)
+			)
+			setMasterResults((prev) => {
+				const next = { ...prev }
+				delete next[editorState.globalIndex]
+				return next
+			})
+			setUploadStatus((prev) => {
+				const next = { ...prev }
+				delete next[editorState.globalIndex]
+				return next
+			})
+			clearEditorPreviewHistoryForItem(editorState.globalIndex)
+			return
+		}
+
+		if (editorState.kind === 'master') {
+			setMasterResults((prev) => ({
+				...prev,
+				[editorState.globalIndex]: {
+					...(prev[editorState.globalIndex] || {}),
+					loading: false,
+					error: null,
+					base64: payload.base64,
+					mimeType: payload.mimeType,
+				},
+			}))
+			setUploadStatus((prev) => {
+				const next = { ...prev }
+				delete next[editorState.globalIndex]
+				return next
+			})
+		}
+	}
+
+	const handlePersistEditorPreviewOptions = (previewOptions = []) => {
+		if (!editorState || !previewOptions.length) {
+			return
+		}
+
+		const currentEditorKey = buildEditorPreviewKey(
+			editorState.kind,
+			editorState.globalIndex,
+			editorState.imageIndex
+		)
+		setEditorPreviewHistory((prev) => ({
+			...prev,
+			[currentEditorKey]: previewOptions,
+		}))
+	}
+
 	const handleGetData = async () => {
 		let interval
 
@@ -197,6 +301,7 @@ export default function StickerPage() {
 			setMasterResults({})
 			setUploadStatus({})
 			setSelectedItems({})
+			setEditorPreviewHistory({})
 
 			interval = setInterval(() => {
 				setProgress((prev) => Math.min(prev + 10, 90))
@@ -275,20 +380,19 @@ export default function StickerPage() {
 		await updateRecordInSheet(target.sheetId, stt, target.gid, [masterFile], 'sticker')
 	}
 
-	const toggleSelectItem = (globalIndex, canSelect) => {
-		if (!canSelect) return
+	const toggleSelectItem = (globalIndex) => {
 		setSelectedItems((prev) => ({
 			...prev,
 			[globalIndex]: !prev[globalIndex],
 		}))
 	}
 
-	const selectAllCurrentPage = () => {
+	const toggleSelectCurrentPage = () => {
 		setSelectedItems((prev) => {
 			const next = { ...prev }
 			paginatedData.forEach((_, idx) => {
 				const globalIndex = (currentPage - 1) * pageSize + idx
-				next[globalIndex] = !!masterResults[globalIndex]?.base64
+				next[globalIndex] = !isCurrentPageFullySelected
 			})
 			return next
 		})
@@ -401,13 +505,17 @@ export default function StickerPage() {
 		}
 	}
 
-	const handleCreateMaster = async (globalIndex, row) => {
+	const handleCreateMaster = async (globalIndex, row, options = {}) => {
+		const { throwOnError = false } = options
 		if (!row.imageLink) {
 			setMasterResults((prev) => ({
 				...prev,
 				[globalIndex]: { loading: false, base64: null, mimeType: null, error: 'Không có LINK ẢNH' },
 			}))
-			return
+			if (throwOnError) {
+				throw new Error('Không có LINK ẢNH')
+			}
+			return false
 		}
 
 		setMasterResults((prev) => ({
@@ -453,6 +561,82 @@ export default function StickerPage() {
 					error: err.message || 'Không tạo được Sticker Master',
 				},
 			}))
+			if (throwOnError) {
+				throw err
+			}
+			return false
+		}
+
+		setSelectedItems((prev) => {
+			if (!prev[globalIndex]) return prev
+			const next = { ...prev }
+			next[globalIndex] = false
+			return next
+		})
+
+		return true
+	}
+
+	const handleCreateSelectedMasters = async () => {
+		const selectedIndices = Object.keys(selectedItems)
+			.filter((index) => selectedItems[index])
+			.map((index) => Number(index))
+			.sort((a, b) => a - b)
+
+		if (!selectedIndices.length) {
+			alert('Vui lòng chọn ít nhất 1 item để tạo master')
+			return
+		}
+
+		setIsBatchCreating(true)
+		try {
+			setMasterResults((prev) => {
+				const next = { ...prev }
+				selectedIndices.forEach((index) => {
+					next[index] = {
+						...(next[index] || {}),
+						loading: true,
+						error: null,
+					}
+				})
+				return next
+			})
+
+			let successCount = 0
+			let failedCount = 0
+			const failedDetails = []
+
+			for (const index of selectedIndices) {
+				const row = data[index]
+				if (!row) {
+					failedCount += 1
+					failedDetails.push(`Item ${index + 1}: Không tìm thấy dữ liệu dòng`)
+					continue
+				}
+
+				try {
+					await handleCreateMaster(index, row, { throwOnError: true })
+					successCount += 1
+				} catch (itemError) {
+					failedCount += 1
+					failedDetails.push(
+						`STT ${row?.stt || index + 1}: ${itemError?.message || 'Lỗi không xác định'}`
+					)
+				}
+			}
+
+			if (failedCount > 0) {
+				alert(
+					`Create Master xong: ${successCount} thành công, ${failedCount} lỗi\n\n` +
+					`Chi tiết lỗi:\n- ${failedDetails.join('\n- ')}`
+				)
+			} else {
+				alert(`Create Master xong: ${successCount} thành công, ${failedCount} lỗi`)
+			}
+		} catch (err) {
+			alert(`Create Master lỗi: ${err.message || 'Không thể tạo master hàng loạt'}`)
+		} finally {
+			setIsBatchCreating(false)
 		}
 	}
 
@@ -504,9 +688,11 @@ export default function StickerPage() {
 						src: editorState.src,
 						title: editorState.title,
 						description: editorState.description,
+						previewOptions: editorState.previewOptions,
 					}}
 					onClose={() => setEditorState(null)}
-					onApply={() => setEditorState(null)}
+					onApply={handleApplyEditorChanges}
+					onPreviewOptionsChange={handlePersistEditorPreviewOptions}
 				/>
 			) : null}
 			{isLoading && (
@@ -540,13 +726,21 @@ export default function StickerPage() {
 						<span className="rounded-lg bg-zinc-200 px-3 py-2 text-xs font-medium text-zinc-700">
 							Đã chọn: {selectedCount} | Sẵn sàng update: {selectedReadyCount}
 						</span>
-						{currentPageReadyCount > 0 && (selectedCount === 0 || selectedReadyCount < selectedCount) ? (
+						<button
+							type="button"
+							onClick={toggleSelectCurrentPage}
+							className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+						>
+							{isCurrentPageFullySelected ? 'Bỏ chọn trang này' : 'Chọn trang này'}
+						</button>
+						{selectedCount > 0 ? (
 							<button
 								type="button"
-								onClick={selectAllCurrentPage}
-								className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+								onClick={handleCreateSelectedMasters}
+								disabled={isBatchCreating}
+								className="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
 							>
-								Chọn trang này
+								{isBatchCreating ? 'Đang tạo master...' : `✨ Create Master ${selectedCount} đã chọn`}
 							</button>
 						) : null}
 						{selectedCount > 0 ? (
@@ -581,26 +775,35 @@ export default function StickerPage() {
 							const globalIndex = (currentPage - 1) * pageSize + idx
 							const hasImage = isValidImageUrl(row.imageLink)
 							const result = masterResults[globalIndex]
-							const canSelect = !!result?.base64
 							const currentUploadStatus = uploadStatus[globalIndex]
 							const outputDataUrl = result?.base64 ? `data:${result.mimeType || 'image/png'};base64,${result.base64}` : ''
+							const baseEditorPreviewOptions = outputDataUrl
+								? [{ id: 'master', label: 'Master', src: outputDataUrl }]
+								: []
+							const sourceEditorPreviewOptions = mergePreviewOptions(
+								baseEditorPreviewOptions,
+								editorPreviewHistory[buildEditorPreviewKey('source', globalIndex)] || []
+							)
+							const masterEditorPreviewOptions = mergePreviewOptions(
+								baseEditorPreviewOptions,
+								editorPreviewHistory[buildEditorPreviewKey('master', globalIndex)] || []
+							)
 
-							return (
-								<article
-									key={`${row.keyword}-${globalIndex}`}
-									className="rounded-2xl border border-zinc-300 bg-white p-5 shadow-sm"
-								>
+					return (
+						<article
+							key={`${row.keyword}-${globalIndex}`}
+							className="rounded-2xl border border-zinc-300 bg-white p-5 shadow-sm"
+						>
 									<div className="mb-4 flex items-center justify-between gap-3">
 										<div className="flex items-center gap-3">
 											<label className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 bg-zinc-50 px-2 py-1 text-xs font-medium text-zinc-700">
 												<input
 													type="checkbox"
 													checked={!!selectedItems[globalIndex]}
-													onChange={() => toggleSelectItem(globalIndex, canSelect)}
-													disabled={!canSelect}
+													onChange={() => toggleSelectItem(globalIndex)}
 													className="h-4 w-4 accent-emerald-500"
 												/>
-												<span>{canSelect ? 'Chọn' : 'Tạo master trước'}</span>
+												<span>{result?.base64 ? 'Chọn' : 'Chọn để tạo master'}</span>
 											</label>
 											<div className="rounded-lg bg-indigo-100 px-3 py-2 text-center font-mono text-sm font-semibold text-indigo-700">
 												STT: {row.stt || globalIndex + 1}
@@ -626,9 +829,12 @@ export default function StickerPage() {
 														loading="lazy"
 														onClick={() =>
 															setEditorState({
+																									kind: 'source',
+																									globalIndex,
 																src: row.imageLink,
 																title: row.keyword || `Source ${globalIndex + 1}`,
 																description: 'Click để xem ảnh gốc đầy đủ',
+																previewOptions: sourceEditorPreviewOptions,
 															})
 														}
 													/>
@@ -652,6 +858,7 @@ export default function StickerPage() {
 													2. CREATE MASTER
 												</span>
 												<button
+													type="button"
 													onClick={() => handleCreateMaster(globalIndex, row)}
 													disabled={result?.loading || !hasImage}
 													className="text-xs font-medium text-indigo-500 hover:text-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -672,9 +879,12 @@ export default function StickerPage() {
 														className="h-96 w-96 rounded-xl object-cover"
 														onClick={() =>
 															setEditorState({
+																									kind: 'master',
+																									globalIndex,
 																src: outputDataUrl,
 																title: `Master - ${row.keyword || globalIndex + 1}`,
 																description: 'Click để xem ảnh master đầy đủ',
+																previewOptions: masterEditorPreviewOptions,
 															})
 														}
 													/>
@@ -770,3 +980,4 @@ export default function StickerPage() {
 		</section>
 	)
 }
+

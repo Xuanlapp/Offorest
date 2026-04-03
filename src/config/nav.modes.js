@@ -27,6 +27,13 @@ export const APP_MODES = {
     permissions: [PERMISSIONS.STICKER_VIEW],
     component: 'StickerPage',
   },
+  admin: {
+    label: 'Admin',
+    path: '/admin',
+    icon: 'MessageCircle',
+    permissions: [PERMISSIONS.ADMIN_VIEW],
+    component: 'AdminPage',
+  },
   }
 
 /**

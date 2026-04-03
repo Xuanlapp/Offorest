@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getDefaultPathForUser, login } from '../services/authService'
+import { getDefaultPathForUser, getFirstProductPath, login } from '../services/authService'
 import { useAuth } from '../contexts/AuthContext'
 
 export default function LoginPage() {
@@ -25,7 +25,11 @@ export default function LoginPage() {
       const user = await login(username, password)
       setUser(user)
       const targetPath = getDefaultPathForUser(user)
-      navigate(targetPath, { replace: true })
+      const safeTargetPath = targetPath === '/no-permission' ? getFirstProductPath(user) : targetPath
+
+      setTimeout(() => {
+        navigate(safeTargetPath, { replace: true })
+      }, 0)
     } catch (err) {
       console.error('Login failed:', err)
       setError(err.message || 'Đăng nhập thất bại. Vui lòng kiểm tra tài khoản và mật khẩu.')

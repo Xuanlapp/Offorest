@@ -9,7 +9,6 @@ export const REMOVAL_MODES = {
 // Remove background using imgly AI model
 export async function removeBackgroundImgly(base64, mimeType = 'image/png') {
   try {
-    console.log('🎨 [BackgroundRemoval] Starting imgly background removal...');
 
     // Convert base64 to blob
     const byteCharacters = atob(base64.split(',')[1] || base64);
@@ -20,19 +19,15 @@ export async function removeBackgroundImgly(base64, mimeType = 'image/png') {
     const byteArray = new Uint8Array(byteNumbers);
     const blob = new Blob([byteArray], { type: mimeType });
 
-    console.log('📊 Input blob size:', blob.size, 'bytes');
 
     // Remove background using imgly
     const resultBlob = await removeBackground(blob);
 
-    console.log('✅ Background removal successful!');
-    console.log('📊 Output blob size:', resultBlob.size, 'bytes');
 
     // Convert result blob to base64 data URL
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => {
-        console.log('✅ [BackgroundRemoval] Conversion to data URL complete');
         resolve(reader.result);
       };
       reader.onerror = () => {
@@ -177,7 +172,6 @@ export function removeBackgroundPixelThreshold(base64, mimeType = 'image/png') {
         queue.push(index);
       };
 
-      console.log('🎨 [BackgroundRemoval] Removing outer background (adaptive edge flood-fill)');
 
       for (let x = 0; x < width; x++) {
         enqueueIfEligible(x, 0);
@@ -264,10 +258,7 @@ export function removeBackgroundPixelThreshold(base64, mimeType = 'image/png') {
 
       ctx.putImageData(imageData, 0, 0);
 
-      console.log('✅ [BackgroundRemoval] Outer background removal complete', {
-        bgTolerance,
-        dominantBgColors: bgColors.length,
-      });
+      
       resolve(canvas.toDataURL('image/png'));
     };
     img.onerror = () => {
@@ -280,12 +271,10 @@ export function removeBackgroundPixelThreshold(base64, mimeType = 'image/png') {
 
 // Smart background removal with fallback
 export async function removeBackgroundSmart(base64, mimeType = 'image/png', preferredMode = REMOVAL_MODES.IMGLY) {
-  console.log(`🎨 [BackgroundRemoval] Starting smart removal (mode: ${preferredMode})`);
 
   if (preferredMode === REMOVAL_MODES.IMGLY) {
     try {
       const result = await removeBackgroundImgly(base64, mimeType);
-      console.log('✅ [BackgroundRemoval] Using imgly mode');
       return result;
     } catch (error) {
       console.warn('⚠️ [BackgroundRemoval] imgly failed, falling back to pixel threshold:', error.message);
@@ -298,12 +287,10 @@ export async function removeBackgroundSmart(base64, mimeType = 'image/png', pref
 
 // Batch remove backgrounds from multiple base64 images
 export async function removeBackgroundBatch(base64Array, mimeType = 'image/png', mode = REMOVAL_MODES.IMGLY) {
-  console.log(`🎨 [BackgroundRemoval] Starting batch removal (${base64Array.length} images, mode: ${mode})`);
 
   const results = [];
   for (let i = 0; i < base64Array.length; i++) {
     try {
-      console.log(`Processing image ${i + 1}/${base64Array.length}`);
       const result = await removeBackgroundSmart(base64Array[i], mimeType, mode);
       results.push({ success: true, data: result });
     } catch (error) {
@@ -312,7 +299,6 @@ export async function removeBackgroundBatch(base64Array, mimeType = 'image/png',
     }
   }
 
-  console.log(`✅ Batch removal complete: ${results.filter(r => r.success).length}/${base64Array.length} successful`);
   return results;
 }
 
