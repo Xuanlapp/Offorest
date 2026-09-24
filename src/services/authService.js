@@ -7,7 +7,9 @@ const ROLE_PERMISSIONS = {
     PERMISSIONS.COMBO_STICKER_VIEW,
     PERMISSIONS.REDESIGN_VIEW,
     PERMISSIONS.STICKER_VIEW,
+    PERMISSIONS.SUNCATCHER_VIEW,
     PERMISSIONS.ADMIN_VIEW,
+    PERMISSIONS.MOCKUP_VIEW,
   ],
   design: [
     PERMISSIONS.HOLOARCYLIC_VIEW,
@@ -15,10 +17,31 @@ const ROLE_PERMISSIONS = {
   ],
   sticker: [
     PERMISSIONS.COMBO_STICKER_VIEW,
+    PERMISSIONS.MOCKUP_VIEW,
   ],
 }
 
 const API_BASE_URL = 'https://nhxlap.id.vn/wp-json/offorest-api/v1'
+export const AUTH_LOGOUT_EVENT = 'offorest:auth-logout'
+
+const getLocalMockupBypassUser = () => {
+  const isLocalMockupBypassEnabled =
+    import.meta.env.DEV && import.meta.env.VITE_OFFOREST_LOCAL_MOCKUP_BYPASS === 'true'
+
+  if (!isLocalMockupBypassEnabled) return null
+
+  return {
+    id: 'local-mockup-user',
+    username: 'local-mockup',
+    name: 'Local Mockup',
+    role: 'local',
+    role_code: 'local',
+    products: [{ id: 5, code: 'mockup', path: APP_MODES.mockup?.path }],
+    product_types: [{ id: 5, code: 'mockup', path: APP_MODES.mockup?.path }],
+    product_type_ids: [5],
+    permissions: [PERMISSIONS.MOCKUP_VIEW],
+  }
+}
 
 const normalizeProductCode = (value = '') =>
   String(value)
@@ -36,15 +59,19 @@ const PRODUCT_PERMISSION_MAP = {
   holoarcylic: PERMISSIONS.HOLOARCYLIC_VIEW,
   'holo-acrylic': PERMISSIONS.HOLOARCYLIC_VIEW,
   'holo-arcylic': PERMISSIONS.HOLOARCYLIC_VIEW,
-  suncatcher: PERMISSIONS.HOLOARCYLIC_VIEW,
+  suncatcher: PERMISSIONS.SUNCATCHER_VIEW,
   ornament: PERMISSIONS.HOLOARCYLIC_VIEW,
   redesign: PERMISSIONS.REDESIGN_VIEW,
+  patch: PERMISSIONS.REDESIGN_VIEW,
+  mockup: PERMISSIONS.MOCKUP_VIEW,
 }
 
 const PRODUCT_ID_MAP = {
   1: { code: 'sticker', path: APP_MODES.sticker?.path, permission: PERMISSIONS.STICKER_VIEW },
-  2: { code: 'ornament', path: APP_MODES.holoornament?.path, permission: PERMISSIONS.HOLOARCYLIC_VIEW },
-  3: { code: 'suncatcher', path: APP_MODES.suncatcher?.path, permission: PERMISSIONS.HOLOARCYLIC_VIEW },
+  2: { code: 'ornament', path: APP_MODES.holoarcylic?.path, permission: PERMISSIONS.HOLOARCYLIC_VIEW },
+  3: { code: 'suncatcher', path: APP_MODES.suncatcher?.path, permission: PERMISSIONS.SUNCATCHER_VIEW },
+  5: { code: 'mockup', path: APP_MODES.mockup?.path, permission: PERMISSIONS.MOCKUP_VIEW },
+  6: { code: 'patch', path: APP_MODES.patch?.path, permission: PERMISSIONS.REDESIGN_VIEW },
 }
 
 const PRODUCT_PATH_MAP = {
@@ -53,13 +80,15 @@ const PRODUCT_PATH_MAP = {
   'combo-sticker': APP_MODES.combosticker?.path,
   'combo-sticker-view': APP_MODES.combosticker?.path,
   'combo-stickers': APP_MODES.combosticker?.path,
-  holoornament: APP_MODES.holoornament?.path,
-  holoarcylic: APP_MODES.holoornament?.path,
-  'holo-acrylic': APP_MODES.holoornament?.path,
-  'holo-arcylic': APP_MODES.holoornament?.path,
+  holoornament: APP_MODES.holoarcylic?.path,
+  holoarcylic: APP_MODES.holoarcylic?.path,
+  'holo-acrylic': APP_MODES.holoarcylic?.path,
+  'holo-arcylic': APP_MODES.holoarcylic?.path,
   suncatcher: APP_MODES.suncatcher?.path,
   ornament: APP_MODES.suncatcher?.path,
   redesign: APP_MODES.redesign?.path,
+  patch: APP_MODES.patch?.path,
+  mockup: APP_MODES.mockup?.path,
 }
 
 const buildPermissionsFromProducts = (products = []) => {
@@ -179,12 +208,80 @@ export const login = async (username, password) => {
   }
 }
 
-export const logout = () => {
+const notifyAuthLogout = (reason = 'manual') => {
+  if (typeof window === 'undefined') return
+
+  try {
+    window.dispatchEvent(new CustomEvent(AUTH_LOGOUT_EVENT, { detail: { reason } }))
+  } catch {
+    // Ignore event dispatch errors.
+  }
+}
+
+const hasAuthExpirySignal = (source = {}) => {
+  const status = Number(source?.status || 0)
+  if (status === 401) return true
+
+  const code = String(source?.code || source?.error_code || source?.errorCode || '').toLowerCase()
+  const message = String(source?.message || source?.error || source?.reason || '').toLowerCase()
+  const raw = String(source?.raw || '').toLowerCase()
+
+  const authCodeHints = [
+    'jwt_auth_invalid_token',
+    'rest_cookie_invalid_nonce',
+    'invalid_token',
+    'token_expired',
+    'expired_token',
+    'unauthorized',
+  ]
+
+  const authMessageHints = [
+    'token',
+    'unauthorized',
+    'forbidden',
+    'nonce',
+    'expired',
+    'authentication',
+    'dang nhap',
+    'đăng nhập',
+  ]
+
+  if (status === 403) {
+    if (authCodeHints.some((hint) => code.includes(hint))) return true
+    if (authMessageHints.some((hint) => message.includes(hint))) return true
+    if (authMessageHints.some((hint) => raw.includes(hint))) return true
+  }
+
+  return false
+}
+
+export const handleAuthExpiredResponse = ({ status = 0, data = null, raw = '' } = {}) => {
+  const candidates = [
+    { status, ...(data && typeof data === 'object' ? data : {}) },
+    data?.error,
+    data?.data,
+    { status, raw },
+  ].filter(Boolean)
+
+  const shouldLogout = candidates.some((candidate) => hasAuthExpirySignal(candidate))
+
+  if (shouldLogout) {
+    logout('expired')
+  }
+
+  return shouldLogout
+}
+
+export const logout = (reason = 'manual') => {
   localStorage.clear()
   sessionStorage.clear()
+  notifyAuthLogout(reason)
 }
 
 export const getCurrentUser = () => {
+  const localMockupUser = getLocalMockupBypassUser()
+  if (localMockupUser) return localMockupUser
+
   const userStr = localStorage.getItem('user')
   if (!userStr) return null
 
@@ -230,4 +327,24 @@ export const hasPermission = (user, requiredPermissions = []) => {
   return requiredPermissions.some((permission) =>
     user.permissions.includes(permission)
   )
+}
+
+export const normalizeRoleCode = (roleCode = '') =>
+  String(roleCode || '')
+    .trim()
+    .toLowerCase()
+
+export const isEtsyRole = (user) => {
+  const roleCode = normalizeRoleCode(user?.role_code || user?.role)
+  return roleCode === 'etsy'
+}
+
+export const isAdminRole = (user) => {
+  const roleCode = normalizeRoleCode(user?.role_code || user?.role)
+  return roleCode === 'admin'
+}
+
+export const isAmazonRole = (user) => {
+  const roleCode = normalizeRoleCode(user?.role_code || user?.role)
+  return roleCode === 'amazon' || roleCode === 'amanzon'
 }

@@ -5,36 +5,56 @@ import { PERMISSIONS } from './permission'
  * Chỉ cần chỉnh sửa object này, NAV_ITEMS sẽ tự động cập nhật
  */
 export const APP_MODES = {
- 
   holoornament: {
     label: 'Holoarcylic',
     path: '/holoarcylic',
-    icon: 'MessageCircle',
+    icon: 'Orbit',
     permissions: [PERMISSIONS.HOLOARCYLIC_VIEW],
     component: 'HoloarcylicPage',
   },
   suncatcher: {
     label: 'Suncatcher',
     path: '/suncatcher',
-    icon: 'MessageCircle',
-    permissions: [PERMISSIONS.HOLOARCYLIC_VIEW],
+    icon: 'SunMedium',
+    permissions: [PERMISSIONS.SUNCATCHER_VIEW],
     component: 'SuncatcherPage',
   },
   sticker: {
     label: 'Sticker',
     path: '/sticker',
-    icon: 'MessageCircle',
+    icon: 'Sticker',
     permissions: [PERMISSIONS.STICKER_VIEW],
     component: 'StickerPage',
+  },
+  mockup: {
+    label: 'Mockup',
+    path: '/mockup',
+    icon: 'MessageCircle',
+    permissions: [PERMISSIONS.MOCKUP_VIEW],
+    component: 'MockupPage',
+  },
+  patch: {
+    label: 'Patch',
+    path: '/patch',
+    icon: 'Scissors',
+    permissions: [PERMISSIONS.REDESIGN_VIEW],
+    component: 'PatchPage',
   },
   admin: {
     label: 'Admin',
     path: '/admin',
-    icon: 'MessageCircle',
+    icon: 'ShieldUser',
     permissions: [PERMISSIONS.ADMIN_VIEW],
     component: 'AdminPage',
   },
-  }
+  redesign: {
+    label: 'Redesign',
+    path: '/redesign',
+    icon: 'Brush',
+    permissions: [PERMISSIONS.REDESIGN_VIEW],
+    component: 'RedesignPage',
+  },
+}
 
 /**
  * Type cho AppMode

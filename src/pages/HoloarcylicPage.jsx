@@ -1,22 +1,52 @@
-import { useMemo, useState, useEffect } from 'react'
-import { redesignImage, generateLifestyleImage } from '../services/geminiService'
+import { useMemo, useState, useEffect, useRef, startTransition } from 'react'
+import { redesignImage, generateMockupImage, generateMarketplaceListingFromRedesign } from '../services/geminiService'
 import { getSheetUrlForPage } from '../services/sheetConfigService'
 import { updateDesignPageImages } from '../services/googleDriveService'
+import { getCurrentUser, isAmazonRole, isEtsyRole } from '../services/authService'
+import {
+  getDefaultMockupPsdFile,
+  pickMockupPsdFile,
+  renderMockupTemplatePreview,
+  renderMockupsFromPsd,
+} from '../services/mockupService'
 import { PROMPTS, PROMPT_DEFAULTS } from '../prompt/Prompts'
 import {
   getPromptsMoiPath,
   removePromptFromPromptsMoi,
   savePromptToPromptsMoi,
 } from '../prompt/PromptsMoiService'
-import ImagePreviewEditorModal from '../components/ImagePreviewEditorModal'
-import PromptEditorModal from '../components/PromptEditorModal'
+import ImagePreviewEditorModal from '../modals/ImagePreviewEditorModal'
+import PromptEditorModal from '../modals/PromptEditorModal'
+import ListedItemsModal from '../modals/ListedItemsModal'
+import { useSheetAutoRefresh } from '../hooks/useSheetAutoRefresh'
 
+// ────── Helper functions ──────
+const downloadAsset = (url, filename) => {
+  const link = document.createElement('a')
+  link.download = filename
+  link.href = url
+  link.click()
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// ────── Component ──────
 export default function HoloarcylicPage() {
+  const PSD_RENDERER = 'ag-psd'
+  const PREFER_PHOTOSHOP_ENGINE = false
+  const MOCKUP_TEMPLATE_STORAGE_KEY = 'holoarcylicMockupTemplatePath'
+  const MOCKUP_TEMPLATE_HISTORY_KEY = 'holoarcylicMockupTemplateHistory'
+  const MOCKUP_TEMPLATE_PREVIEWS_KEY = 'holoarcylicMockupTemplatePreviews'
+  const CUSTOM_MOCKUPS_STORAGE_KEY = 'holoarcylicCustomMockups'
   const [isLoading, setIsLoading] = useState(false)
 
   const [progress, setProgress] = useState(0)
   const [error, setError] = useState('')
   const [data, setData] = useState([])
+  const [fullSheetRows, setFullSheetRows] = useState([])
+  const [autoRefreshCsvUrl, setAutoRefreshCsvUrl] = useState('')
+  const [newRowsNotice, setNewRowsNotice] = useState(0)
+  const dataRef = useRef([])
   const [selectedProduct, setSelectedProduct] = useState('ALL')
   const [pageSize, setPageSize] = useState(10)
   const [currentPage, setCurrentPage] = useState(1)
@@ -28,10 +58,39 @@ export default function HoloarcylicPage() {
   const [isUploading, setIsUploading] = useState(false)
   const [uploadStatus, setUploadStatus] = useState({})
   const [lifestyleResults, setLifestyleResults] = useState({})
+  const [customMockups, setCustomMockups] = useState({})
+  const [renderedMockupImagesCount, setRenderedMockupImagesCount] = useState({})
+  const [searchTerm, setSearchTerm] = useState('')
+  const [showProductSummary, setShowProductSummary] = useState(false)
+  const [allSheetProductNames, setAllSheetProductNames] = useState([])
+  const [showProductFilterMenu, setShowProductFilterMenu] = useState(false)
+  const [mockupTemplatePath, setMockupTemplatePath] = useState('')
+  const [mockupTemplateHistory, setMockupTemplateHistory] = useState([])
+  const [mockupTemplatePreviews, setMockupTemplatePreviews] = useState({})
+  const [showMockupPicker, setShowMockupPicker] = useState(false)
+  const [previewMockupTemplatePath, setPreviewMockupTemplatePath] = useState('')
+  const [mockupTemplatePreviewLoadingPath, setMockupTemplatePreviewLoadingPath] = useState('')
+  const [mockupRenderStatus, setMockupRenderStatus] = useState({})
+  const [isElectronMockupAvailable, setIsElectronMockupAvailable] = useState(false)
+  const [isElectronRuntime, setIsElectronRuntime] = useState(false)
   const [editorState, setEditorState] = useState(null)
   const [editorPreviewHistory, setEditorPreviewHistory] = useState({})
   const [showPromptEditor, setShowPromptEditor] = useState(false)
+  const [isListedItemsModalOpen, setIsListedItemsModalOpen] = useState(false)
   const [holoPrompt, setHoloPrompt] = useState(() => PROMPTS.holographicOrnament)
+  const [mockupHolo1, setMockupHolo1] = useState(() => PROMPTS.MockupHolo1)
+  const [mockupHolo2, setMockupHolo2] = useState(() => PROMPTS.MockupHolo2)
+  const [mockupHolo3, setMockupHolo3] = useState(() => PROMPTS.MockupHolo3)
+  const persistCustomMockupsTimerRef = useRef(null)
+  const mockupImagesRef = useRef({})
+  const lifestyleQueueRef = useRef(Promise.resolve())
+  const productFilterMenuRef = useRef(null)
+
+  const mockupBridgeStatus = isElectronRuntime
+    ? isElectronMockupAvailable
+      ? 'Electron bridge: ready'
+      : 'Electron bridge: missing'
+    : 'Web mode (no Electron bridge)'
   const productNames = useMemo(() => {
     const uniqueProducts = new Set(
       data
@@ -41,16 +100,199 @@ export default function HoloarcylicPage() {
     return Array.from(uniqueProducts)
   }, [data])
 
+  const allSheetProductOptions = useMemo(() => {
+    return Array.from(
+      new Set(
+        fullSheetRows
+          // Product dropdown must only use product-name column values.
+          .map((row) => String(row?.sanPham || '').trim())
+          .filter(Boolean)
+      )
+    )
+  }, [fullSheetRows])
+
+  const productFilterOptions = useMemo(() => {
+    const source = allSheetProductNames.length
+      ? allSheetProductNames
+      : (allSheetProductOptions.length ? allSheetProductOptions : productNames)
+    const uniqueProducts = Array.from(new Set(source.map((name) => String(name || '').trim()).filter(Boolean)))
+    return ['ALL', ...uniqueProducts]
+  }, [allSheetProductNames, allSheetProductOptions, productNames])
+
   const filteredRowsWithIndex = useMemo(() => {
     const rowsWithIndex = data.map((row, globalIndex) => ({ row, globalIndex }))
-    if (selectedProduct === 'ALL') {
-      return rowsWithIndex
+    let filtered = rowsWithIndex
+    if (selectedProduct !== 'ALL') {
+      filtered = filtered.filter(({ row }) => String(row.sanPham || '').trim() === selectedProduct)
     }
-
-    return rowsWithIndex.filter(({ row }) => String(row.sanPham || '').trim() === selectedProduct)
-  }, [data, selectedProduct])
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase()
+      filtered = filtered.filter(({ row }) => 
+        row.keyword.toLowerCase().includes(term) || row.stt.toString().includes(term)
+      )
+    }
+    return filtered
+  }, [data, selectedProduct, searchTerm])
 
   const totalPages = Math.max(1, Math.ceil(filteredRowsWithIndex.length / pageSize))
+
+  const getTemplatePreviewImages = (templatePath) => {
+    const normalizedPath = String(templatePath || '').trim()
+    if (!normalizedPath) return []
+
+    const cachedPreviews = mockupTemplatePreviews[normalizedPath]
+    if (Array.isArray(cachedPreviews) && cachedPreviews.length) {
+      return cachedPreviews
+    }
+
+    return []
+  }
+
+  const activeMockupPreviewImages =
+    getTemplatePreviewImages(previewMockupTemplatePath)
+    || []
+
+  const readStoredJson = (storageKey, fallbackValue) => {
+    try {
+      const raw = localStorage.getItem(storageKey)
+      if (!raw) return fallbackValue
+      return JSON.parse(raw)
+    } catch {
+      return fallbackValue
+    }
+  }
+
+  const writeStoredJson = (storageKey, value) => {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(value))
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  const syncMockupTemplateSelection = (nextTemplatePath, { announceChange = false } = {}) => {
+    const normalizedPath = String(nextTemplatePath || '').trim()
+    if (!normalizedPath) return
+
+    const previousTemplatePath = String(localStorage.getItem(MOCKUP_TEMPLATE_STORAGE_KEY) || '').trim()
+    setMockupTemplatePath(normalizedPath)
+    localStorage.setItem(MOCKUP_TEMPLATE_STORAGE_KEY, normalizedPath)
+
+    setMockupTemplateHistory((prev) => {
+      const nextHistory = [normalizedPath, ...prev.filter((item) => item !== normalizedPath)].slice(0, 12)
+      writeStoredJson(MOCKUP_TEMPLATE_HISTORY_KEY, nextHistory)
+      return nextHistory
+    })
+
+    if (announceChange && previousTemplatePath && previousTemplatePath !== normalizedPath) {
+      alert(`Đã đổi mockup mặc định sang file mới.\n\nCũ: ${previousTemplatePath}\nMới: ${normalizedPath}`)
+    }
+  }
+
+  const persistMockupTemplatePreview = (templatePath, outputs = []) => {
+    const normalizedPath = String(templatePath || '').trim()
+    if (!normalizedPath) return
+
+    // Only store first preview in state to avoid bloating it with all base64 data
+    const firstPreview = Array.isArray(outputs) && outputs.length
+      ? outputs[0]
+      : null
+
+    if (!firstPreview?.dataUrl) {
+      return
+    }
+
+    const previewOutput = {
+      name: firstPreview?.name || 'MOCKUP.png',
+      dataUrl: String(firstPreview.dataUrl),
+    }
+
+    setMockupTemplatePreviews((prev) => {
+      const next = {
+        ...prev,
+        [normalizedPath]: [previewOutput],
+      }
+      return next
+    })
+  }
+
+  // Sync dataRef để hook polling luôn đọc được data mới nhất
+  useEffect(() => { dataRef.current = data }, [data])
+
+  // Parse CSV text → pending rows (cùng logic với handleGetData)
+  // Không cần useCallback vì hook tự sync qua ref mỗi render
+  const parseRowsForAutoRefresh = (csvText) => {
+    const rows = parseCSV(csvText)
+    const isInputKey = (key) => {
+      const norm = normalizeHeader(key)
+      return norm.includes('stt') || norm.includes('keyword') || norm.includes('sanpham')
+        || norm.includes('description') || norm.includes('linkanh') || norm.includes('linklink')
+    }
+    return rows
+      .filter((row) => {
+        const kw = getValueByAliases(row, ['KEYWORD', 'Keyword'])
+        if (!String(kw || '').trim()) return false
+
+        const stt = getValueByAliases(row, ['STT', 'Stt'])
+        const sttValue = String(stt || '').trim()
+        const sttNum = Number(sttValue)
+        const isValidStt = sttValue !== '' && Number.isInteger(sttNum) && sttNum > 0
+        if (!isValidStt) return false
+        
+        const sanPham = getValueByAliases(row, ['SẢN PHẨM'])
+        if (sanPham && normalizeHeader(sanPham) === 'suncatcher') return false
+
+        const linkAnh = getValueByAliases(row, ['LINK ẢNH', 'Link ảnh', 'LINK ANH', 'LINK NGUỒN', 'Link nguồn', 'LINK NGUON', 'Image', 'Image Link', 'IMAGE LINK'])
+        if (!String(linkAnh || '').trim()) return false
+
+        const redesign = getValueByAliases(row, ['REDESIGN', 'Redesign', 'FINAL CONCEPT REDESIGN'])
+        if (String(redesign || '').trim()) return false
+
+        const hasOutput = Object.entries(row).some(([key, val]) => {
+          if (isInputKey(key)) return false
+          return String(val || '').trim().length > 0
+        })
+        return !hasOutput
+      })
+      .map((row) => ({
+        stt: getValueByAliases(row, ['STT', 'Stt']),
+        keyword: getValueByAliases(row, ['KEYWORD', 'Keyword']),
+        description: getValueByAliases(row, ['DESCRIPTION', 'Description', 'PRODUCT DESCRIPTION', 'Product Description']),
+        imageLink: getValueByAliases(row, ['LINK ẢNH', 'LINK ANH', 'Link ảnh', 'Image link', 'Link image']),
+        sanPham: getValueByAliases(row, ['SẢN PHẨM']),
+        redesignText: getValueByAliases(row, ['REDESIGN', 'Redesign', 'FINAL CONCEPT REDESIGN']),
+        mockup1Text: getValueByAliases(row, ['MOCKUP1', 'MOCKUP 1']),
+        mockup2Text: getValueByAliases(row, ['MOCKUP2', 'MOCKUP 2']),
+        mockup3Text: getValueByAliases(row, ['MOCKUP3', 'MOCKUP 3']),
+      }))
+  }
+
+  // Tự động polling 30s — chỉ append dòng mới, không reset state
+  useSheetAutoRefresh({
+    csvUrl: autoRefreshCsvUrl,
+    enabled: Boolean(autoRefreshCsvUrl),
+    isBusy: isLoading || isUploading
+      || Object.values(redesignResults).some((r) => r?.loading),
+    parseRows: parseRowsForAutoRefresh,
+    getCurrentData: () => dataRef.current,
+    getRowKey: (row) => row.stt || row.keyword || '',
+    onNewRows: (newRows) => {
+      setData((prev) => [...prev, ...newRows])
+      setNewRowsNotice((prev) => prev + newRows.length)
+      setTimeout(() => setNewRowsNotice(0), 5000)
+    },
+    intervalMs: 90_000,
+  })
+
+  // Tự động get data lần đầu nếu đã có sheet URL lưu sẵn
+  useEffect(() => {
+    const savedUrl = localStorage.getItem('holoarcylicSheetUrl') || ''
+    if (savedUrl) {
+      handleGetData()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     // Listen for event from Navbar "Get Data" button
@@ -62,23 +304,192 @@ export default function HoloarcylicPage() {
     return () => window.removeEventListener('holoarcylicGetData', handleGetDataEvent)
   }, [])
 
+  useEffect(() => {
+    const savedCustomMockups = readStoredJson(CUSTOM_MOCKUPS_STORAGE_KEY, {})
+    const savedMockupTemplatePath = String(localStorage.getItem(MOCKUP_TEMPLATE_STORAGE_KEY) || '').trim()
+    const savedMockupTemplateHistory = readStoredJson(MOCKUP_TEMPLATE_HISTORY_KEY, [])
+    const savedMockupTemplatePreviews = readStoredJson(MOCKUP_TEMPLATE_PREVIEWS_KEY, {})
+
+    setIsElectronRuntime(Boolean(window?.navigator?.userAgent?.includes('Electron')))
+    setIsElectronMockupAvailable(
+      Boolean(
+        window?.offorestMockup?.pickPsdFile
+        && (window?.offorestMockup?.preparePreviewOverlay || window?.offorestMockup?.renderFromPsd)
+      )
+    )
+
+    if (savedCustomMockups && typeof savedCustomMockups === 'object') {
+      setCustomMockups(savedCustomMockups)
+    }
+
+    if (savedMockupTemplatePath) {
+      setMockupTemplatePath(savedMockupTemplatePath)
+      setPreviewMockupTemplatePath(savedMockupTemplatePath)
+    }
+
+    if (Array.isArray(savedMockupTemplateHistory) && savedMockupTemplateHistory.length) {
+      setMockupTemplateHistory(savedMockupTemplateHistory)
+    }
+
+    if (savedMockupTemplatePreviews && typeof savedMockupTemplatePreviews === 'object') {
+      setMockupTemplatePreviews(savedMockupTemplatePreviews)
+    }
+
+    const bootstrapMockupTemplate = async () => {
+      if (savedMockupTemplatePath) {
+        return
+      }
+
+      try {
+        const result = await getDefaultMockupPsdFile()
+        if (result?.filePath) {
+          setMockupTemplatePath(result.filePath)
+          localStorage.setItem(MOCKUP_TEMPLATE_STORAGE_KEY, result.filePath)
+        }
+      } catch {
+        // Ignore default template lookup errors.
+      }
+    }
+
+    bootstrapMockupTemplate()
+  }, [])
+
+  useEffect(() => {
+    if (persistCustomMockupsTimerRef.current) {
+      clearTimeout(persistCustomMockupsTimerRef.current)
+    }
+
+    persistCustomMockupsTimerRef.current = setTimeout(() => {
+      writeStoredJson(CUSTOM_MOCKUPS_STORAGE_KEY, customMockups)
+    }, 400)
+
+    return () => {
+      if (persistCustomMockupsTimerRef.current) {
+        clearTimeout(persistCustomMockupsTimerRef.current)
+      }
+    }
+  }, [customMockups])
+
+  // Progressive rendering: render images one by one to avoid freezing
+  useEffect(() => {
+    const timeoutHandles = []
+
+    Object.keys(customMockups).forEach((key) => {
+      const globalIndex = Number(key)
+      if (!Number.isNaN(globalIndex)) {
+        const allImages = mockupImagesRef.current[globalIndex]
+        const currentCount = renderedMockupImagesCount[globalIndex] || 0
+
+        if (Array.isArray(allImages) && allImages.length > currentCount) {
+          // Progressive rendering: add next image after small delay
+          const nextImageIndex = currentCount
+          const handle = setTimeout(() => {
+            setRenderedMockupImagesCount((prev) => ({
+              ...prev,
+              [globalIndex]: Math.min(currentCount + 1, allImages.length),
+            }))
+          }, nextImageIndex * 100) // 100ms between each image
+
+          timeoutHandles.push(handle)
+        }
+      }
+    })
+
+    return () => {
+      timeoutHandles.forEach((handle) => clearTimeout(handle))
+    }
+  }, [customMockups, renderedMockupImagesCount])
+
   const paginatedData = useMemo(
     () => filteredRowsWithIndex.slice((currentPage - 1) * pageSize, currentPage * pageSize),
     [filteredRowsWithIndex, currentPage, pageSize]
+  )
+
+  const selectedReadyCount = useMemo(
+    () => Array.from(selectedItems).filter((index) => redesignResults[index]?.base64).length,
+    [selectedItems, redesignResults]
+  )
+
+  const totalReadyCount = useMemo(
+    () => filteredRowsWithIndex.reduce(
+      (count, { globalIndex }) => (redesignResults[globalIndex]?.base64 ? count + 1 : count),
+      0
+    ),
+    [filteredRowsWithIndex, redesignResults]
   )
 
   useEffect(() => {
     setCurrentPage(1)
   }, [selectedProduct])
 
+  useEffect(() => {
+    const normalizedSelected = String(selectedProduct || '').trim()
+    if (!normalizedSelected || normalizedSelected === 'ALL') {
+      return
+    }
+
+    const matchByProduct = (row) => String(row?.sanPham || '').trim() === normalizedSelected
+    const selectedRow = data.find(matchByProduct) || fullSheetRows.find(matchByProduct)
+
+    if (!selectedRow) {
+      return
+    }
+
+    setHoloPrompt(String(selectedRow.redesignText ?? ''))
+    setMockupHolo1(String(selectedRow.mockup1Text ?? ''))
+    setMockupHolo2(String(selectedRow.mockup2Text ?? ''))
+    setMockupHolo3(String(selectedRow.mockup3Text ?? ''))
+  }, [selectedProduct, data, fullSheetRows])
+
+  const handleGetProducts = () => {
+    const names = Array.from(
+      new Set(
+        fullSheetRows
+          .map((row) => String(row?.sanPham || '').trim())
+          .filter(Boolean)
+      )
+    )
+
+    setAllSheetProductNames(names)
+    setSelectedProduct('ALL')
+    setShowProductFilterMenu(true)
+  }
+
+  useEffect(() => {
+    const handleOutsideClick = (event) => {
+      if (productFilterMenuRef.current && !productFilterMenuRef.current.contains(event.target)) {
+        setShowProductFilterMenu(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handleOutsideClick)
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick)
+    }
+  }, [])
+
   const extractSheetInfo = (url) => {
     const idMatch = url.match(/\/d\/([a-zA-Z0-9-_]+)/)
-    const gidMatch = url.match(/#gid=(\d+)/)
+    const gidMatch = url.match(/(?:#|[?&])gid=(\d+)/)
 
     return {
       id: idMatch ? idMatch[1] : null,
       gid: gidMatch ? gidMatch[1] : '0',
     }
+  }
+
+  const getResolvedSheetInfo = async () => {
+    let sheetUrl = localStorage.getItem('holoarcylicSheetUrl')
+    if (!sheetUrl) {
+      sheetUrl = await getSheetUrlForPage('holoarcylic')
+    }
+
+    const { id: sheetId, gid } = extractSheetInfo(sheetUrl || '')
+    if (!sheetId) {
+      throw new Error('Link sheet từ config không hợp lệ')
+    }
+
+    return { sheetUrl, sheetId, gid }
   }
 
   const normalizeHeader = (text) =>
@@ -159,6 +570,26 @@ export default function HoloarcylicPage() {
     }
   }
 
+  const getItemMockupTemplatePath = (globalIndex) => {
+    const itemTemplatePath = customMockups?.[globalIndex]?.templatePath
+    return String(itemTemplatePath || mockupTemplatePath || '').trim()
+  }
+
+  const setItemMockupTemplatePath = (globalIndex, templatePath) => {
+    const normalizedPath = String(templatePath || '').trim()
+    if (!normalizedPath) {
+      return
+    }
+
+    setCustomMockups((prev) => ({
+      ...prev,
+      [globalIndex]: {
+        ...(prev[globalIndex] || {}),
+        templatePath: normalizedPath,
+      },
+    }))
+  }
+
   const getLifestylePreviewImages = (lifestyle) =>
     Array.isArray(lifestyle?.images) && lifestyle.images.length
       ? lifestyle.images
@@ -194,6 +625,25 @@ export default function HoloarcylicPage() {
     lastModified: file?.lastModified || null,
   })
 
+  const generateMarketplaceMetadataIfNeeded = async (redesign, row) => {
+    const user = getCurrentUser()
+    const isEtsy = isEtsyRole(user)
+    const isAmazon = isAmazonRole(user)
+
+    if (!isEtsy && !isAmazon) {
+      return null
+    }
+
+    return generateMarketplaceListingFromRedesign({
+      marketplace: isAmazon ? 'amazon' : 'etsy',
+      base64: redesign?.base64,
+      mimeType: redesign?.mimeType || 'image/png',
+      prompt: isAmazon ? PROMPTS.AmazonTitle : PROMPTS.EtsyTitle,
+      keyword: row?.keyword || '',
+      productType: row?.sanPham || 'Holographic Ornament',
+    })
+  }
+
   const buildEditorPreviewKey = (kind, globalIndex, imageIndex = 'root') =>
     `${kind}:${globalIndex}:${imageIndex}`
 
@@ -225,7 +675,7 @@ export default function HoloarcylicPage() {
     })
   }
 
-  const handleApplyEditorChanges = async ({ dataUrl, previewOptions = [] }) => {
+  const handleApplyEditorChanges = async ({ dataUrl, previewOptions = [], selectedPreviewId = '' }) => {
     if (!editorState) {
       return
     }
@@ -235,12 +685,10 @@ export default function HoloarcylicPage() {
       editorState.globalIndex,
       editorState.imageIndex
     )
-    if (previewOptions.length) {
-      setEditorPreviewHistory((prev) => ({
-        ...prev,
-        [currentEditorKey]: previewOptions,
-      }))
-    }
+    setEditorPreviewHistory((prev) => ({
+      ...prev,
+      [currentEditorKey]: previewOptions,
+    }))
 
     const payload = dataUrlToImagePayload(dataUrl)
 
@@ -314,11 +762,306 @@ export default function HoloarcylicPage() {
           },
         }
       })
+      return
+    }
+
+    if (editorState.kind === 'customMockup') {
+      const selectedMockupPreviewOptions = Array.isArray(previewOptions)
+        ? previewOptions.filter((option) => option?.src)
+        : []
+      const activeMockupPreviewOption =
+        selectedMockupPreviewOptions.find((option) => option.id === selectedPreviewId) ||
+        selectedMockupPreviewOptions[0] ||
+        null
+      setCustomMockups((prev) => ({
+        ...prev,
+        [editorState.globalIndex]: {
+          ...prev[editorState.globalIndex],
+          dataUrl: activeMockupPreviewOption?.src || '',
+          name:
+            activeMockupPreviewOption?.label ||
+            prev[editorState.globalIndex]?.name ||
+            `custom-mockup-${editorState.globalIndex + 1}.png`,
+          images: selectedMockupPreviewOptions.map((option, index) => ({
+            name: option.label || `mockup-${index + 1}.png`,
+            dataUrl: option.src,
+          })),
+        },
+      }))
+    }
+  }
+
+  const handleCustomMockupUpload = async (globalIndex, file) => {
+    if (!file) return
+
+    if (!String(file.type || '').startsWith('image/')) {
+      alert('Vui lòng chọn file ảnh hợp lệ')
+      return
+    }
+
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result)
+      reader.onerror = () => reject(new Error('Không thể đọc file ảnh'))
+      reader.readAsDataURL(file)
+    })
+
+    setCustomMockups((prev) => ({
+      ...prev,
+      [globalIndex]: {
+        source: 'manual',
+        name: file.name,
+        dataUrl: String(dataUrl || ''),
+        images: [
+          {
+            name: file.name,
+            dataUrl: String(dataUrl || ''),
+          },
+        ],
+      },
+    }))
+  }
+
+  const getMockupPreviewImages = (globalIndex) => {
+    // Progressive rendering: only show images that have been rendered
+    const allImages = mockupImagesRef.current[globalIndex] || []
+    const renderedCount = renderedMockupImagesCount[globalIndex] || 0
+
+    // Show rendered images from ref
+    if (Array.isArray(allImages) && allImages.length > 0) {
+      return allImages.slice(0, renderedCount)
+    }
+
+    // Fallback if ref is empty
+    const item = customMockups[globalIndex]
+    if (item?.dataUrl) {
+      return [
+        {
+          name: item?.name || `mockup-${globalIndex + 1}.png`,
+          dataUrl: item.dataUrl,
+        },
+      ]
+    }
+    return []
+  }
+
+  const getAllMockupImages = (globalIndex) => {
+    const allImages = mockupImagesRef.current[globalIndex] || []
+    if (Array.isArray(allImages) && allImages.length) {
+      return allImages
+    }
+
+    const item = customMockups[globalIndex]
+    if (item?.dataUrl) {
+      return [
+        {
+          name: item?.name || `mockup-${globalIndex + 1}.png`,
+          dataUrl: item.dataUrl,
+        },
+      ]
+    }
+
+    return []
+  }
+
+  const handlePickMockupTemplate = async () => {
+    if (!isElectronMockupAvailable) {
+      if (isElectronRuntime) {
+        alert('Đang chạy Electron nhưng preload bridge PSD chưa nạp. Hãy đóng toàn bộ cửa sổ app và mở lại bằng npm.cmd run electron:dev.')
+      } else {
+        alert('Không chọn được PSD vì bạn đang chạy web mode. Hãy mở app bằng Electron desktop (npm.cmd run start hoặc npm.cmd run electron:dev).')
+      }
+      return
+    }
+
+    try {
+      const result = await pickMockupPsdFile()
+      if (!result?.canceled && result?.filePath) {
+        syncMockupTemplateSelection(result.filePath, { announceChange: true })
+      }
+    } catch (err) {
+      alert(err?.message || 'Không thể chọn file MOCKUP.psd')
+    }
+  }
+
+  const handleGenerateMockupFromTemplate = async (globalIndex, designDataUrl) => {
+    if (!designDataUrl) {
+      alert('Vui lòng tạo FINAL CONCEPT REDESIGN trước')
+      return
+    }
+
+    const effectiveTemplatePath = getItemMockupTemplatePath(globalIndex)
+    if (!effectiveTemplatePath) {
+      alert('Vui lòng chọn file MOCKUP.psd trước')
+      return
+    }
+
+    setMockupRenderStatus((prev) => ({ ...prev, [globalIndex]: 'loading' }))
+
+    try {
+      const result = await renderMockupsFromPsd({
+        psdPath: effectiveTemplatePath,
+        designDataUrl,
+        renderer: PSD_RENDERER,
+        preferPhotoshop: PREFER_PHOTOSHOP_ENGINE,
+      })
+
+      if (result?.warning) {
+        console.warn(result.warning)
+      }
+
+      const images = Array.isArray(result?.outputs)
+        ? result.outputs
+          .filter((output) => output?.dataUrl && String(output.dataUrl).startsWith('data:image/'))
+          .map((output, index) => ({
+            name: output?.name || `MOCKUP ${index + 1}.png`,
+            dataUrl: String(output.dataUrl),
+          }))
+        : []
+
+      if (!images.length) {
+        throw new Error('Không render được ảnh PNG nào từ PSD')
+      }
+
+      // Use startTransition to prevent UI freeze during state updates
+      startTransition(() => {
+        // Store all images in ref for deferred loading (avoid bloating state)
+        if (!mockupImagesRef.current) {
+          mockupImagesRef.current = {}
+        }
+        mockupImagesRef.current[globalIndex] = images
+
+        // Update state with only the first image + metadata
+        setCustomMockups((prev) => ({
+          ...prev,
+          [globalIndex]: {
+            source: 'psd',
+            templatePath: result?.templatePath || effectiveTemplatePath,
+            name: images[0]?.name || `mockup-${globalIndex + 1}.png`,
+            dataUrl: images[0]?.dataUrl || '',
+            imageCount: images.length,
+          },
+        }))
+
+        // Start progressive rendering: show first image immediately
+        setRenderedMockupImagesCount((prev) => ({
+          ...prev,
+          [globalIndex]: 1,
+        }))
+
+        persistMockupTemplatePreview(result?.templatePath || effectiveTemplatePath, result?.outputs || [])
+      })
+
+      setMockupRenderStatus((prev) => ({ ...prev, [globalIndex]: 'done' }))
+    } catch (err) {
+      console.error('Render mockup PSD error:', err)
+      setMockupRenderStatus((prev) => ({ ...prev, [globalIndex]: 'error' }))
+      alert(err?.message || 'Không thể render mockup từ PSD')
+    }
+  }
+
+  const getFileNameFromPath = (filePath) => {
+    const value = String(filePath || '').trim()
+    if (!value) return 'Unknown mockup'
+    return value.split(/[\\/]/).filter(Boolean).pop() || value
+  }
+
+  const openMockupPicker = () => {
+    const initialPreviewPath = mockupTemplatePath || mockupTemplateHistory[0] || ''
+    setPreviewMockupTemplatePath(initialPreviewPath)
+    setShowMockupPicker(true)
+  }
+
+  const ensureMockupTemplatePreview = async (templatePath) => {
+    const normalizedPath = String(templatePath || '').trim()
+    if (!normalizedPath) return []
+
+    const cachedPreviews = mockupTemplatePreviews[normalizedPath]
+    if (Array.isArray(cachedPreviews) && cachedPreviews.length) {
+      return cachedPreviews
+    }
+
+    const result = await renderMockupTemplatePreview({ psdPath: normalizedPath })
+    const previewImages = Array.isArray(result?.outputs)
+      ? result.outputs
+        .filter((output) => output?.dataUrl && String(output.dataUrl).startsWith('data:image/'))
+        .map((output, index) => ({
+          name: output?.name || `MOCKUP ${index + 1}.png`,
+          dataUrl: String(output.dataUrl),
+        }))
+      : []
+
+    // Only store the first preview to avoid state bloat
+    if (previewImages.length > 0) {
+      setMockupTemplatePreviews((prev) => {
+        const next = {
+          ...prev,
+          [normalizedPath]: [previewImages[0]],
+        }
+        return next
+      })
+    }
+
+    return previewImages
+  }
+
+  const selectMockupTemplateFromHistory = (filePath) => {
+    syncMockupTemplateSelection(filePath, { announceChange: false })
+    setPreviewMockupTemplatePath(filePath)
+    setShowMockupPicker(false)
+  }
+
+  const removeMockupTemplateFromHistory = (filePath) => {
+    const normalizedPath = String(filePath || '').trim()
+    if (!normalizedPath) return
+
+    const nextHistory = mockupTemplateHistory.filter((item) => item !== normalizedPath)
+    const nextPreviews = { ...mockupTemplatePreviews }
+    delete nextPreviews[normalizedPath]
+
+    const nextMockupImagesRef = { ...mockupImagesRef.current }
+    delete nextMockupImagesRef[normalizedPath]
+    mockupImagesRef.current = nextMockupImagesRef
+
+    setMockupTemplateHistory(nextHistory)
+    setMockupTemplatePreviews(nextPreviews)
+    writeStoredJson(MOCKUP_TEMPLATE_HISTORY_KEY, nextHistory)
+
+    if (mockupTemplatePath === normalizedPath) {
+      const nextSelected = nextHistory[0] || ''
+      setMockupTemplatePath(nextSelected)
+      if (nextSelected) {
+        localStorage.setItem(MOCKUP_TEMPLATE_STORAGE_KEY, nextSelected)
+      } else {
+        localStorage.removeItem(MOCKUP_TEMPLATE_STORAGE_KEY)
+      }
+    }
+
+    if (previewMockupTemplatePath === normalizedPath) {
+      setPreviewMockupTemplatePath(nextHistory[0] || '')
+    }
+  }
+
+  const handleShowMockupTemplate = async (filePath) => {
+    const normalizedPath = String(filePath || '').trim()
+    if (!normalizedPath) return
+
+    setPreviewMockupTemplatePath(normalizedPath)
+    setShowMockupPicker(true)
+    setMockupTemplatePreviewLoadingPath(normalizedPath)
+
+    try {
+      await ensureMockupTemplatePreview(normalizedPath)
+    } catch (error) {
+      console.error('Render template preview error:', error)
+      alert(error?.message || 'Không thể xuất PNG từ mockup template')
+    } finally {
+      setMockupTemplatePreviewLoadingPath((prev) => (prev === normalizedPath ? '' : prev))
     }
   }
 
   const handlePersistEditorPreviewOptions = (previewOptions = []) => {
-    if (!editorState || !previewOptions.length) {
+    if (!editorState) {
       return
     }
 
@@ -353,12 +1096,12 @@ export default function HoloarcylicPage() {
       const productName = data[globalIndex]?.sanPham || 'product'
       const keyword = String(data[globalIndex]?.keyword || '').trim()
       const productPrefix = `The product is a ${productName}. Automatically detect and preserve its correct material, physical properties, and real-world appearance based on this product type.\n\n`
-      const keywordRefinementInstruction =  `Use the provided keyword  (${keyword}) as the core subject direction, and refine or adjust the visual content around it while strictly preserving the original subject and without adding any new elements.`
+      const keywordRefinementInstruction = `Use the provided keyword  (${keyword}) as the core subject direction, and refine or adjust the visual content around it while strictly preserving the original subject and without adding any new elements.`
       const fullPrompt = [productPrefix + holoPrompt, keywordRefinementInstruction]
         .filter(Boolean)
         .join('\n\n')
-      
-      const result = await redesignImage(imageLink,  fullPrompt)
+
+      const result = await redesignImage(imageLink, fullPrompt)
       setRedesignResults((prev) => ({
         ...prev,
         [globalIndex]: { loading: false, base64: result.base64, mimeType: result.mimeType, error: null },
@@ -378,20 +1121,18 @@ export default function HoloarcylicPage() {
     let interval;
 
     try {
-      // Check for manual sheet URL in localStorage first
-      let sheetUrl = localStorage.getItem('holoarcylicSheetUrl');
-      
-      // Fallback to config service if no manual URL
-      if (!sheetUrl) {
-        sheetUrl = await getSheetUrlForPage('holoarcylic');
-      }
-      
-      const { id: sheetId, gid } = extractSheetInfo(sheetUrl);
+      const { sheetId, gid } = await getResolvedSheetInfo()
 
-      if (!sheetId) {
-        setError('Link sheet từ config không hợp lệ');
-        return;
-      }
+      // Xóa sạch kết quả cũ
+      setRedesignResults({})
+      setLifestyleResults({})
+      setUploadStatus({})
+      setSelectedItems(new Set())
+      setCustomMockups({})
+      setRenderedMockupImagesCount({})
+      setMockupRenderStatus({})
+      setEditorState(null)
+      setEditorPreviewHistory({})
 
       setIsLoading(true);
       setProgress(0);
@@ -408,34 +1149,84 @@ export default function HoloarcylicPage() {
       const response = await fetch(csvUrl);
 
       if (!response.ok) {
-        throw new Error('Không thể truy cập sheet. Đảm bảo sheet được chia sẻ công khai.');
+        if (response.status === 403) {
+          throw new Error(`Không thể truy cập sheet (HTTP ${response.status}). Hãy publish sheet to web: File > Share > Publish to web > Publish.`);
+        }
+        throw new Error(`Không thể truy cập sheet (HTTP ${response.status})`);
       }
 
       const csvData = await response.text();
       const rows = parseCSV(csvData);
 
-      const filteredRows = rows
+      const normalizedFullRows = rows.map((row) => ({
+        stt: getValueByAliases(row, ['STT', 'Stt']),
+        keyword: getValueByAliases(row, ['KEYWORD', 'Keyword']),
+        description: getValueByAliases(row, ['DESCRIPTION', 'Description', 'PRODUCT DESCRIPTION', 'Product Description']),
+        imageLink: getValueByAliases(row, ['LINK ẢNH', 'LINK ANH', 'Link ảnh', 'Image link', 'Link image']),
+        sanPham: getValueByAliases(row, ['SẢN PHẨM', 'SAN PHAM', 'Product type']),
+        redesignText: getValueByAliases(row, ['REDESIGN', 'Redesign', 'FINAL CONCEPT REDESIGN']),
+        mockup1Text: getValueByAliases(row, ['MOCKUP1', 'MOCKUP 1']),
+        mockup2Text: getValueByAliases(row, ['MOCKUP2', 'MOCKUP 2']),
+        mockup3Text: getValueByAliases(row, ['MOCKUP3', 'MOCKUP 3']),
+      }))
+      setFullSheetRows(normalizedFullRows)
+
+      // Product filter list must come from full current sheet data (unfiltered rows).
+      const uniqueProductNames = Array.from(
+        new Set(
+          normalizedFullRows
+            .map((row) => row.sanPham)
+            .map((value) => String(value || '').trim())
+            .filter(Boolean)
+        )
+      )
+      setAllSheetProductNames(uniqueProductNames)
+
+      const usableRows = rows
         .filter((row) => {
-          const statusValue = getValueByAliases(row, ['TRẠNG THÁI', 'Status']);
-          if (statusValue) return false;
-          const redesignValue = getValueByAliases(row, ['REDESIGN', 'REDESIGN']);
-          if (redesignValue) return false;
-          const sanPham = getValueByAliases(row, ['SẢN PHẨM']);
-          if (sanPham && normalizeHeader(sanPham) === 'suncatcher') return false;
-          return true;
+          const sanPham = getValueByAliases(row, ['SẢN PHẨM', 'SAN PHAM', 'Product type'])
+          const isSuncatcher = normalizeHeader(String(sanPham || '').trim()) === normalizeHeader('Suncatcher')
+          if (isSuncatcher) return false
+
+          const stt = getValueByAliases(row, ['STT', 'Stt'])
+          const sttValue = String(stt || '').trim()
+          const sttNum = Number(sttValue)
+          const isValidStt = sttValue !== '' && Number.isInteger(sttNum) && sttNum > 0
+          if (!isValidStt) return false
+
+          const linkAnh = getValueByAliases(row, ['LINK ẢNH', 'Link ảnh', 'LINK ANH', 'LINK NGUỒN', 'Link nguồn', 'LINK NGUON', 'Image', 'Image Link', 'IMAGE LINK'])
+          const hasLinkAnh = String(linkAnh || '').trim()
+          const redesign = getValueByAliases(row, ['REDESIGN', 'Redesign', 'FINAL CONCEPT REDESIGN'])
+          const isRedesignEmpty = String(redesign || '').trim() === ''
+          return Boolean(hasLinkAnh && isRedesignEmpty)
         })
         .map((row) => ({
           stt: getValueByAliases(row, ['STT', 'Stt']),
           keyword: getValueByAliases(row, ['KEYWORD', 'Keyword']),
+          description: getValueByAliases(row, ['DESCRIPTION', 'Description', 'PRODUCT DESCRIPTION', 'Product Description']),
           imageLink: getValueByAliases(row, ['LINK ẢNH', 'LINK ANH', 'Link ảnh', 'Image link', 'Link image']),
           sanPham: getValueByAliases(row, ['SẢN PHẨM']),
-        }));
+          redesignText: getValueByAliases(row, ['REDESIGN', 'Redesign', 'FINAL CONCEPT REDESIGN']),
+          mockup1Text: getValueByAliases(row, ['MOCKUP1', 'MOCKUP 1']),
+          mockup2Text: getValueByAliases(row, ['MOCKUP2', 'MOCKUP 2']),
+          mockup3Text: getValueByAliases(row, ['MOCKUP3', 'MOCKUP 3']),
+        }))
+
+      if (usableRows.length === 0) {
+        setError('Không tìm thấy hàng nào (không phải Suncatcher), có LINK ẢNH và REDESIGN trống.')
+      }
 
       clearInterval(interval);
       setProgress(100);
-      setData(filteredRows);
+      setData(usableRows);
+      dataRef.current = usableRows
+      setNewRowsNotice(0)
+      // Bật polling sau khi load xong
+      setAutoRefreshCsvUrl(`https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`)
     } catch (err) {
       if (interval) clearInterval(interval);
+      setFullSheetRows([])
+      setAllSheetProductNames([])
       setError(err.message || 'Không thể lấy dữ liệu từ sheet');
     } finally {
       setIsLoading(false);
@@ -453,12 +1244,41 @@ export default function HoloarcylicPage() {
     setSelectedItems(newSelected)
   }
 
+  const enqueueLifestyleJob = (job) => {
+    const nextRun = lifestyleQueueRef.current.then(job, job)
+    lifestyleQueueRef.current = nextRun.catch(() => {})
+    return nextRun
+  }
+
+  const isRateLimitError = (error) => {
+    const message = String(error?.message || '').toLowerCase()
+    return message.includes('429') || message.includes('rate limit') || message.includes('too many')
+  }
+
+  const generateMockupStepWithFallback = async ({ imageUrl, prompt }) => {
+    try {
+      return await generateMockupImage({ imageUrl, prompt })
+    } catch (error) {
+      if (!isRateLimitError(error)) {
+        throw error
+      }
+
+      // Extra one-shot fallback in case backend retries just exhausted a burst window.
+      await sleep(1200)
+      return generateMockupImage({ imageUrl, prompt })
+    }
+  }
+
   const handleGenerateLifestyle = async (globalIndex) => {
     const redesign = redesignResults[globalIndex]
     if (!redesign?.base64) {
       alert('Vui lòng tạo ✨ Create Master trước')
       return
     }
+    if (lifestyleResults[globalIndex]?.loading) {
+      return
+    }
+
     setLifestyleResults((prev) => ({
       ...prev,
       [globalIndex]: {
@@ -472,26 +1292,83 @@ export default function HoloarcylicPage() {
         error: null,
       },
     }))
+
     try {
-      const result = await generateLifestyleImage({
-        file: null,
-        imageUrl: `data:${redesign.mimeType};base64,${redesign.base64}`,
-        keyword: data[globalIndex]?.keyword || '',
+      await enqueueLifestyleJob(async () => {
+      const sourceDataUrl = `data:${redesign.mimeType};base64,${redesign.base64}`
+
+      const holoMockup1 = await generateMockupStepWithFallback({
+        imageUrl: sourceDataUrl,
+        prompt: mockupHolo1,
       })
+
+      setLifestyleResults((prev) => ({
+        ...prev,
+        [globalIndex]: {
+          loading: true,
+          base64: holoMockup1.base64,
+          mimeType: holoMockup1.mimeType,
+          images: [holoMockup1],
+          analysis: null,
+          mockup: null,
+          raw: {
+            holoMockup1: holoMockup1.raw,
+            holoMockup2: null,
+            holoMockup3: null,
+          },
+          error: null,
+        },
+      }))
+
+      const holoMockup2 = await generateMockupStepWithFallback({
+        imageUrl: `data:${holoMockup1.mimeType};base64,${holoMockup1.base64}`,
+        prompt: mockupHolo2,
+      })
+
+      setLifestyleResults((prev) => ({
+        ...prev,
+        [globalIndex]: {
+          loading: true,
+          base64: holoMockup1.base64,
+          mimeType: holoMockup1.mimeType,
+          images: [holoMockup1, holoMockup2],
+          analysis: null,
+          mockup: null,
+          raw: {
+            holoMockup1: holoMockup1.raw,
+            holoMockup2: holoMockup2.raw,
+            holoMockup3: null,
+          },
+          error: null,
+        },
+      }))
+
+      const holoMockup3 = await generateMockupStepWithFallback({
+        imageUrl: `data:${holoMockup2.mimeType};base64,${holoMockup2.base64}`,
+        prompt: mockupHolo3,
+      })
+
+      const images = [holoMockup1, holoMockup2, holoMockup3]
+
       setLifestyleResults((prev) => ({
         ...prev,
         [globalIndex]: {
           loading: false,
-          base64: result.base64,
-          mimeType: result.mimeType,
-          images: Array.isArray(result.images) ? result.images : [],
-          analyses: Array.isArray(result.analyses) ? result.analyses : [],
-          analysis: result.analysis || null,
-          mockup: result.mockup || null,
-          raw: result.raw || null,
+          base64: holoMockup1.base64,
+          mimeType: holoMockup1.mimeType,
+          images,
+          analyses: [],
+          analysis: null,
+          mockup: null,
+          raw: {
+            holoMockup1: holoMockup1.raw,
+            holoMockup2: holoMockup2.raw,
+            holoMockup3: holoMockup3.raw,
+          },
           error: null,
         },
       }))
+      })
     } catch (err) {
       setLifestyleResults((prev) => ({
         ...prev,
@@ -506,6 +1383,28 @@ export default function HoloarcylicPage() {
           error: err.message,
         },
       }))
+    }
+  }
+
+  const handleDownloadAllLifestyle = async (globalIndex) => {
+    const lifestyle = lifestyleResults[globalIndex]
+    const lifestylePreviewImages = getLifestylePreviewImages(lifestyle)
+
+    if (!lifestylePreviewImages.length) {
+      alert('Không có ảnh lifestyle để tải')
+      return
+    }
+
+    const row = data[globalIndex]
+    const keyword = row?.keyword || `item-${globalIndex + 1}`
+    const sanitizedKeyword = String(keyword).replace(/[/\\?%*:|"<>]/g, '-')
+
+    for (let i = 0; i < lifestylePreviewImages.length; i += 1) {
+      const lifestyleImage = lifestylePreviewImages[i]
+      if (!lifestyleImage?.base64) continue
+      const lifestyleSrc = `data:${lifestyleImage.mimeType || 'image/png'};base64,${lifestyleImage.base64}`
+      downloadAsset(lifestyleSrc, `holoarcylic-${sanitizedKeyword}-lifestyle-${i + 1}.png`)
+      await sleep(150)
     }
   }
 
@@ -537,18 +1436,45 @@ export default function HoloarcylicPage() {
 
       const accessToken = localStorage.getItem('googleDriveAccessToken')
       const stt = data[globalIndex]?.stt ?? (globalIndex + 1)
-      const lifestyleFiles = await getLifestyleFiles(globalIndex)
       const row = data[globalIndex]
-
-      if (!lifestyleFiles.length) {
-        throw new Error('Vui lòng chọn ảnh lifestyle trước khi upload')
-      }
 
       const redesignSrc = `data:${redesign.mimeType};base64,${redesign.base64}`
       const redesignBlob = await fetch(redesignSrc).then((r) => r.blob())
       const redesignFile = new File([redesignBlob], `holoarcylic-redesign-${globalIndex}.png`, { type: 'image/png' })
+      const lifestyleFiles = []
+      const lifestylePreviewImages = getLifestylePreviewImages(lifestyleResults[globalIndex])
+      for (let i = 0; i < lifestylePreviewImages.length; i += 1) {
+        const lifestyleImage = lifestylePreviewImages[i]
+        if (!lifestyleImage?.base64) continue
+        const lifestyleSrc = `data:${lifestyleImage.mimeType || 'image/png'};base64,${lifestyleImage.base64}`
+        const lifestyleBlob = await fetch(lifestyleSrc).then((r) => r.blob())
+        const lifestyleFile = new File(
+          [lifestyleBlob],
+          `holoarcylic-lifestyle-${globalIndex}-${i + 1}.png`,
+          { type: lifestyleImage.mimeType || 'image/png' }
+        )
+        lifestyleFiles.push(lifestyleFile)
+      }
+      const mockupFiles = []
+      const mockupData = customMockups[globalIndex]
+      if (mockupData?.images && Array.isArray(mockupData.images)) {
+        for (let i = 0; i < mockupData.images.length; i++) {
+          const mockup = mockupData.images[i]
+          if (mockup?.dataUrl && String(mockup.dataUrl).startsWith('data:')) {
+            const mockupBlob = await fetch(mockup.dataUrl).then((r) => r.blob())
+            const mockupFile = new File(
+              [mockupBlob],
+              `holoarcylic-mockup-${globalIndex}-${i + 1}.png`,
+              { type: 'image/png' }
+            )
+            mockupFiles.push(mockupFile)
+          }
+        }
+      }
+      const marketplaceMetadata = await generateMarketplaceMetadataIfNeeded(redesign, row)
+      const optionalFiles = [...lifestyleFiles, ...mockupFiles]
 
-      
+
 
       const response = await updateDesignPageImages({
         sheetId,
@@ -556,12 +1482,25 @@ export default function HoloarcylicPage() {
         accessToken,
         stt,
         redesignImageFile: redesignFile,
-        lifestyleImageFiles: lifestyleFiles,
+        lifestyleImageFiles: optionalFiles.length ? optionalFiles : null,
+        requireLifestyleImage: false,
+        title: marketplaceMetadata?.title || '',
+        description: marketplaceMetadata?.description || '',
+        tags: marketplaceMetadata?.tags || null,
+        marketplace: marketplaceMetadata?.marketplace === 'amazon' ? 'Amazon' : marketplaceMetadata?.marketplace === 'etsy' ? 'Etsy' : '',
+        productDescription: marketplaceMetadata?.productDescription || '',
+        bulletPoint1: marketplaceMetadata?.bulletPoint1 || '',
+        bulletPoint2: marketplaceMetadata?.bulletPoint2 || '',
+        bulletPoint3: marketplaceMetadata?.bulletPoint3 || '',
+        bulletPoint4: marketplaceMetadata?.bulletPoint4 || '',
+        bulletPoint5: marketplaceMetadata?.bulletPoint5 || '',
+        genericKeyword: marketplaceMetadata?.genericKeyword || '',
         pageKey: 'holoarcylic',
       })
 
-     
+
       setUploadStatus((prev) => ({ ...prev, [globalIndex]: 'done' }))
+      setData(prevData => prevData.filter((_, idx) => idx !== globalIndex))
     } catch (err) {
       console.error('❌ [HoloarcylicPage] Single image upload failed', {
         globalIndex,
@@ -577,8 +1516,14 @@ export default function HoloarcylicPage() {
   }
 
   const handleUploadBatch = async () => {
-    if (selectedItems.size === 0) {
-      alert('Vui lòng chọn ít nhất 1 ô để upload')
+    const selectedIndices = Array.from(selectedItems)
+    const candidateIndices = selectedIndices.length
+      ? selectedIndices
+      : filteredRowsWithIndex.map(({ globalIndex }) => globalIndex)
+    const validIndices = candidateIndices.filter((index) => redesignResults[index]?.base64)
+
+    if (!validIndices.length) {
+      alert('Chưa có item nào có ảnh bước 2 (Create Master) để upload')
       return
     }
 
@@ -605,40 +1550,64 @@ export default function HoloarcylicPage() {
 
     // Initialize all selected items to "uploading"
     const newStatus = {}
-    selectedItems.forEach((idx) => {
+    validIndices.forEach((idx) => {
       newStatus[idx] = 'uploading'
     })
     setUploadStatus((prev) => ({ ...prev, ...newStatus }))
 
     let successCount = 0
     let errorCount = 0
+    let successfulIndices = []
 
- 
-    
 
-    // Upload each selected item
-    for (const globalIndex of Array.from(selectedItems)) {
+
+
+    // Upload each valid item
+    for (const globalIndex of validIndices) {
       try {
         const redesign = redesignResults[globalIndex]
-        if (!redesign?.base64) {
-          setUploadStatus((prev) => ({ ...prev, [globalIndex]: 'error' }))
-          continue
-        }
 
         const stt = data[globalIndex]?.stt ?? (globalIndex + 1)
         const row = data[globalIndex]
-        const lifestyleFiles = await getLifestyleFiles(globalIndex)
-
-        if (!lifestyleFiles.length) {
-          throw new Error('Vui lòng chọn ảnh lifestyle trước khi upload')
-        }
 
         const redesignSrc = `data:${redesign.mimeType};base64,${redesign.base64}`
         const redesignBlob = await fetch(redesignSrc).then((r) => r.blob())
         const redesignFile = new File([redesignBlob], `holoarcylic-redesign-${globalIndex}.png`, { type: 'image/png' })
+        const lifestyleFiles = []
+        const lifestylePreviewImages = getLifestylePreviewImages(lifestyleResults[globalIndex])
+        for (let i = 0; i < lifestylePreviewImages.length; i += 1) {
+          const lifestyleImage = lifestylePreviewImages[i]
+          if (!lifestyleImage?.base64) continue
+          const lifestyleSrc = `data:${lifestyleImage.mimeType || 'image/png'};base64,${lifestyleImage.base64}`
+          const lifestyleBlob = await fetch(lifestyleSrc).then((r) => r.blob())
+          const lifestyleFile = new File(
+            [lifestyleBlob],
+            `holoarcylic-lifestyle-${globalIndex}-${i + 1}.png`,
+            { type: lifestyleImage.mimeType || 'image/png' }
+          )
+          lifestyleFiles.push(lifestyleFile)
+        }
+        const mockupFiles = []
+        const mockupData = customMockups[globalIndex]
+        if (mockupData?.images && Array.isArray(mockupData.images)) {
+          for (let i = 0; i < mockupData.images.length; i++) {
+            const mockup = mockupData.images[i]
+            if (mockup?.dataUrl && String(mockup.dataUrl).startsWith('data:')) {
+              const mockupBlob = await fetch(mockup.dataUrl).then((r) => r.blob())
+              const mockupFile = new File(
+                [mockupBlob],
+                `holoarcylic-mockup-${globalIndex}-${i + 1}.png`,
+                { type: 'image/png' }
+              )
+              mockupFiles.push(mockupFile)
+            }
+          }
+        }
+        const marketplaceMetadata = await generateMarketplaceMetadataIfNeeded(redesign, row)
+        const optionalFiles = [...lifestyleFiles, ...mockupFiles]
 
 
-        
+
 
         const response = await updateDesignPageImages({
           sheetId,
@@ -646,112 +1615,383 @@ export default function HoloarcylicPage() {
           accessToken,
           stt,
           redesignImageFile: redesignFile,
-          lifestyleImageFiles: lifestyleFiles,
+          lifestyleImageFiles: optionalFiles.length ? optionalFiles : null,
+          requireLifestyleImage: false,
+          title: marketplaceMetadata?.title || '',
+          description: marketplaceMetadata?.description || '',
+          tags: marketplaceMetadata?.tags || null,
+          marketplace: marketplaceMetadata?.marketplace === 'amazon' ? 'Amazon' : marketplaceMetadata?.marketplace === 'etsy' ? 'Etsy' : '',
+          productDescription: marketplaceMetadata?.productDescription || '',
+          bulletPoint1: marketplaceMetadata?.bulletPoint1 || '',
+          bulletPoint2: marketplaceMetadata?.bulletPoint2 || '',
+          bulletPoint3: marketplaceMetadata?.bulletPoint3 || '',
+          bulletPoint4: marketplaceMetadata?.bulletPoint4 || '',
+          bulletPoint5: marketplaceMetadata?.bulletPoint5 || '',
+          genericKeyword: marketplaceMetadata?.genericKeyword || '',
           pageKey: 'holoarcylic',
         })
 
-      
+
 
         successCount += 1
+        successfulIndices.push(globalIndex)
         setUploadStatus((prev) => ({ ...prev, [globalIndex]: 'done' }))
       } catch (err) {
-       
+
         errorCount += 1
         setUploadStatus((prev) => ({ ...prev, [globalIndex]: 'error' }))
       }
     }
 
-  
+
+
+    if (successfulIndices.length > 0) {
+      setData(prevData => prevData.filter((_, idx) => !successfulIndices.includes(idx)))
+    }
 
     setIsUploading(false)
-    alert('Upload hoàn tất!')
+    alert(`Upload hoàn tất: ${successCount} thành công, ${errorCount} lỗi.`)
     setSelectedItems(new Set())
   }
 
   return (
     <section className="rounded-2xl border border-zinc-200 bg-zinc-100/95 p-6 text-zinc-800">
-        <PromptEditorModal
-          isOpen={showPromptEditor}
-          title="Change Prompt - Holoarcylic"
-          description="Chinh sua prompt dang dung cho Holoarcylic page. Save de ap dung ngay cho lan tao tiep theo."
-          fields={[
-            {
-              key: 'holoPrompt',
-              label: 'Holoarcylic Prompt',
-              value: holoPrompt,
-              oldValue: PROMPT_DEFAULTS.holographicOrnament,
-              rows: 14,
-            },
-          ]}
-          onClose={() => setShowPromptEditor(false)}
-          onSave={async (values) => {
-            const nextPrompt = String(values.holoPrompt ?? '')
-            setHoloPrompt(nextPrompt)
-            try {
-              await savePromptToPromptsMoi('holographicOrnament', nextPrompt)
-              const filePath = await getPromptsMoiPath()
-              if (filePath) {
-                alert(`Da luu prompt vao:\n${filePath}`)
-              }
-            } catch (error) {
-              alert(error?.message || 'Khong the luu prompt vao PromptsMoi.ts')
+      <PromptEditorModal
+        isOpen={showPromptEditor}
+        title="Change Prompt - Holoarcylic"
+        description="Chinh sua prompt dang dung cho Holoarcylic page. Save de ap dung ngay cho lan tao tiep theo."
+        tabbed
+        initialTabKey="holoPrompt"
+        fields={[
+          {
+            key: 'holoPrompt',
+            label: 'Holoarcylic Prompt',
+            tabLabel: 'Design',
+            value: holoPrompt,
+            oldValue: PROMPT_DEFAULTS.holographicOrnament,
+            rows: 14,
+          },
+          {
+            key: 'mockupHolo1',
+            label: 'Mockup Holo 1',
+            tabLabel: 'Mockup1',
+            value: mockupHolo1,
+            oldValue: PROMPT_DEFAULTS.MockupHolo1,
+            rows: 8,
+          },
+          {
+            key: 'mockupHolo2',
+            label: 'Mockup Holo 2',
+            tabLabel: 'Mockup2',
+            value: mockupHolo2,
+            oldValue: PROMPT_DEFAULTS.MockupHolo2,
+            rows: 8,
+          },
+          {
+            key: 'mockupHolo3',
+            label: 'Mockup Holo 3',
+            tabLabel: 'Mockup3',
+            value: mockupHolo3,
+            oldValue: PROMPT_DEFAULTS.MockupHolo3,
+            rows: 8,
+          },
+        ]}
+        onClose={() => setShowPromptEditor(false)}
+        onSave={async (values, meta = {}) => {
+          const activeFieldKey = String(meta?.activeFieldKey || '')
+          const fieldToUpdate = {
+            holoPrompt: { key: 'holographicOrnament', value: String(values.holoPrompt ?? ''), setter: setHoloPrompt },
+            mockupHolo1: { key: 'MockupHolo1', value: String(values.mockupHolo1 ?? ''), setter: setMockupHolo1 },
+            mockupHolo2: { key: 'MockupHolo2', value: String(values.mockupHolo2 ?? ''), setter: setMockupHolo2 },
+            mockupHolo3: { key: 'MockupHolo3', value: String(values.mockupHolo3 ?? ''), setter: setMockupHolo3 },
+          }[activeFieldKey]
+
+          if (!fieldToUpdate) {
+            return
+          }
+
+          fieldToUpdate.setter(fieldToUpdate.value)
+
+          try {
+            await savePromptToPromptsMoi(fieldToUpdate.key, fieldToUpdate.value)
+            const filePath = await getPromptsMoiPath()
+            if (filePath) {
+              alert(`Da luu prompt vao:\n${filePath}`)
             }
+          } catch (error) {
+            alert(error?.message || 'Khong the luu prompt vao PromptsMoi.ts')
+          }
+        }}
+        onReset={async () => {
+          setHoloPrompt(PROMPT_DEFAULTS.holographicOrnament)
+          setMockupHolo1(PROMPT_DEFAULTS.MockupHolo1)
+          setMockupHolo2(PROMPT_DEFAULTS.MockupHolo2)
+          setMockupHolo3(PROMPT_DEFAULTS.MockupHolo3)
+          PROMPTS.holographicOrnament = PROMPT_DEFAULTS.holographicOrnament
+          PROMPTS.MockupHolo1 = PROMPT_DEFAULTS.MockupHolo1
+          PROMPTS.MockupHolo2 = PROMPT_DEFAULTS.MockupHolo2
+          PROMPTS.MockupHolo3 = PROMPT_DEFAULTS.MockupHolo3
+          try {
+            await removePromptFromPromptsMoi('holographicOrnament')
+            await removePromptFromPromptsMoi('MockupHolo1')
+            await removePromptFromPromptsMoi('MockupHolo2')
+            await removePromptFromPromptsMoi('MockupHolo3')
+          } catch (error) {
+            alert(error?.message || 'Khong the reset prompt trong PromptsMoi.ts')
+          }
+        }}
+      />
+      {editorState ? (
+        <ImagePreviewEditorModal
+          asset={{
+            src: editorState.src,
+            title: editorState.title,
+            description: editorState.description,
+            previewOptions: editorState.previewOptions,
           }}
-          onReset={async () => {
-            setHoloPrompt(PROMPT_DEFAULTS.holographicOrnament)
-            PROMPTS.holographicOrnament = PROMPT_DEFAULTS.holographicOrnament
-            try {
-              await removePromptFromPromptsMoi('holographicOrnament')
-            } catch (error) {
-              alert(error?.message || 'Khong the reset prompt trong PromptsMoi.ts')
-            }
-          }}
+          onClose={() => setEditorState(null)}
+          onApply={handleApplyEditorChanges}
+          onPreviewOptionsChange={handlePersistEditorPreviewOptions}
+          disableAutoBackgroundOnCustomEdit
         />
-        {editorState ? (
-          <ImagePreviewEditorModal
-            asset={{
-              src: editorState.src,
-              title: editorState.title,
-              description: editorState.description,
-              previewOptions: editorState.previewOptions,
-            }}
-            onClose={() => setEditorState(null)}
-            onApply={handleApplyEditorChanges}
-            onPreviewOptionsChange={handlePersistEditorPreviewOptions}
-          />
-        ) : null}
-        {isLoading && (
-          <div className="mt-3">
-            <div className="h-2 w-full rounded-full bg-zinc-200">
-              <div
-                className="h-2 rounded-full bg-indigo-600 transition-all duration-300"
-                style={{ width: `${progress}%` }}
-              />
+      ) : null}
+      {showMockupPicker ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4">
+          <div className="w-full max-w-5xl rounded-3xl border border-zinc-200 bg-white p-5 shadow-2xl">
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-zinc-200 pb-4">
+              <div>
+                <h3 className="text-xl font-semibold text-zinc-900">Chọn mockup</h3>
+                <p className="mt-1 text-sm text-zinc-500">
+                  Chọn file đã nhớ trước đó hoặc bấm dấu + để thêm mockup mới.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handlePickMockupTemplate}
+                  disabled={!isElectronMockupAvailable}
+                  className="rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  title={isElectronMockupAvailable ? 'Chọn file mockup mới' : 'Tính năng chỉ hoạt động trong Electron'}
+                >
+                  +
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowMockupPicker(false)}
+                  className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-600 hover:bg-zinc-50"
+                >
+                  Đóng
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-4 lg:grid-cols-[1.05fr_0.95fr]">
+              <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-3">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h4 className="text-sm font-semibold uppercase tracking-wide text-zinc-600">Mockup đã chọn trước đó</h4>
+                  <span className="text-xs text-zinc-500">{mockupTemplateHistory.length} file</span>
+                </div>
+
+                <div className="max-h-[460px] space-y-2 overflow-auto pr-1">
+                  {mockupTemplateHistory.length ? (
+                    mockupTemplateHistory.map((filePath) => {
+                      const isActive = filePath === mockupTemplatePath
+                      const isPreviewActive = filePath === previewMockupTemplatePath
+                      const isTemplatePreviewLoading = filePath === mockupTemplatePreviewLoadingPath
+                      return (
+                        <div
+                          key={filePath}
+                          className={`rounded-xl border px-3 py-3 transition ${isPreviewActive
+                              ? 'border-amber-400 bg-amber-50'
+                              : 'border-zinc-200 bg-white hover:border-amber-300 hover:bg-amber-50/60'
+                            }`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <button
+                              type="button"
+                              onClick={() => handleShowMockupTemplate(filePath)}
+                              className="min-w-0 flex-1 text-left"
+                              disabled={isTemplatePreviewLoading}
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className={`inline-flex h-2.5 w-2.5 rounded-full ${isActive ? 'bg-amber-500' : 'bg-zinc-300'}`} />
+                                <span className="truncate text-sm font-semibold text-zinc-900">
+                                  {getFileNameFromPath(filePath)}
+                                </span>
+                                {isTemplatePreviewLoading ? (
+                                  <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />
+                                ) : null}
+                              </div>
+                              <div className="mt-1 truncate text-xs text-zinc-500">{filePath}</div>
+                            </button>
+
+                            <div className="flex shrink-0 items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => selectMockupTemplateFromHistory(filePath)}
+                                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${isActive
+                                    ? 'bg-amber-600 text-white'
+                                    : 'border border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50'
+                                  }`}
+                                disabled={isTemplatePreviewLoading}
+                              >
+                                Chọn
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => removeMockupTemplateFromHistory(filePath)}
+                                className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-600 transition hover:bg-red-50"
+                              >
+                                Xóa
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-zinc-300 bg-white p-4 text-sm text-zinc-500">
+                      Chưa có mockup nào được chọn trước đó.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-zinc-200 bg-white p-3">
+                <div className="mb-3 flex items-start justify-between gap-3">
+                  <div>
+                    <h4 className="text-sm font-semibold uppercase tracking-wide text-zinc-600">Show mockup</h4>
+                    <p className="mt-1 text-xs text-zinc-500">
+                      {previewMockupTemplatePath ? getFileNameFromPath(previewMockupTemplatePath) : 'Chọn một mockup để xem preview.'}
+                    </p>
+                  </div>
+                  <div className="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs font-semibold text-zinc-600">
+                    {activeMockupPreviewImages.length
+                      ? `${activeMockupPreviewImages.length} MOCKUP *`
+                      : '0 MOCKUP *'}
+                  </div>
+                </div>
+
+                <div className="max-h-[460px] overflow-auto rounded-xl border border-zinc-200 bg-zinc-50 p-3">
+                  {mockupTemplatePreviewLoadingPath && mockupTemplatePreviewLoadingPath === previewMockupTemplatePath ? (
+                    <div className="flex h-full min-h-[180px] flex-col items-center justify-center gap-2 text-zinc-500">
+                      <div className="h-8 w-8 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />
+                      <span className="text-xs">Đang tải mockup từ PSD...</span>
+                    </div>
+                  ) : activeMockupPreviewImages.length > 0 ? (
+                    <div className="grid grid-cols-2 gap-2">
+                      {activeMockupPreviewImages.map((preview, index) => (
+                        <div key={`${previewMockupTemplatePath || mockupTemplatePath}-${index}`} className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
+                          <div className="border-b border-zinc-100 px-3 py-2 text-xs font-semibold text-zinc-600">
+                            {preview?.name || `MOCKUP ${index + 1}.png`}
+                          </div>
+                          <img
+                            src={preview.dataUrl}
+                            alt={preview?.name || `mockup-preview-${index + 1}`}
+                            className="h-44 w-full rounded-lg object-cover bg-white"
+                            loading="lazy"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="flex h-full min-h-[180px] items-center justify-center text-sm text-zinc-500">
+                      Chưa có PNG preview cho mockup này. Hãy render PSD một lần để lưu preview.
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
-        )}
+        </div>
+      ) : null}
+      {isLoading && (
+        <div className="mt-3">
+          <div className="h-2 w-full rounded-full bg-zinc-200">
+            <div
+              className="h-2 rounded-full bg-indigo-600 transition-all duration-300"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+        </div>
+      )}
 
-        {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
       <div className="mt-8 flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-3xl font-semibold tracking-tight text-zinc-900">
           Design Workspace ({filteredRowsWithIndex.length} Items)
         </h2>
         <div className="flex flex-wrap items-center justify-end gap-2">
+          {showProductSummary ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-1.5 text-xs font-medium text-cyan-800">
+                Danh sách sản phẩm lấy từ toàn bộ dữ liệu sheet hiện tại.
+              </div>
+              <button
+                type="button"
+                onClick={handleGetProducts}
+                className="rounded-lg border border-cyan-300 bg-cyan-50 px-3 py-1.5 text-xs font-semibold text-cyan-700 hover:bg-cyan-100"
+              >
+                Lấy danh sách
+              </button>
+            </div>
+          ) : (
+            <input
+              type="text"
+              placeholder="Search by STT or Keyword..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm focus:border-indigo-500 focus:outline-none"
+            />
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              if (showProductSummary) {
+                setShowProductSummary(false)
+                setShowProductFilterMenu(false)
+                return
+              }
+              setShowProductSummary(true)
+              setSearchTerm('')
+            }}
+            className="rounded-lg border border-cyan-300 bg-cyan-50 px-3 py-1.5 text-xs font-semibold text-cyan-700 hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {showProductSummary ? 'Ẩn sản phẩm' : 'Get Sản phẩm'}
+          </button>
+          <button
+            type="button"
+            onClick={openMockupPicker}
+            disabled={!isElectronMockupAvailable}
+            className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+            title={
+              isElectronMockupAvailable
+                ? 'Chọn / show mockup đã nhớ trước đó'
+                : 'Tính năng PSD chỉ hoạt động trong Electron desktop app'
+            }
+          >
+            Chọn mockup
+          </button>
+          <button
+            onClick={() => setIsListedItemsModalOpen(true)}
+            className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50"
+          >
+            Listed
+          </button>
           <button
             type="button"
             onClick={() => setShowPromptEditor(true)}
             className="rounded-lg border border-indigo-300 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-600 hover:bg-indigo-50"
           >
-            Change Prompt
+           📝 Prompt
           </button>
-          <div className="flex flex-wrap items-center gap-2">
+          {/* <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => setSelectedProduct('ALL')}
-              className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
-                selectedProduct === 'ALL'
+              className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${selectedProduct === 'ALL'
                   ? 'border-indigo-500 bg-indigo-500 text-white'
                   : 'border-zinc-300 bg-white text-zinc-700 hover:border-indigo-300 hover:text-indigo-600'
-              }`}
+                }`}
             >
               ALL
             </button>
@@ -759,28 +1999,98 @@ export default function HoloarcylicPage() {
               <button
                 key={productName}
                 onClick={() => setSelectedProduct(productName)}
-                className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
-                  selectedProduct === productName
+                className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${selectedProduct === productName
                     ? 'border-indigo-500 bg-indigo-500 text-white'
                     : 'border-zinc-300 bg-white text-zinc-700 hover:border-indigo-300 hover:text-indigo-600'
-                }`}
+                  }`}
               >
                 {productName}
               </button>
             ))}
-          </div>
+          </div> */}
 
-          {selectedItems.size > 0 && (
-            <button
-              onClick={handleUploadBatch}
-              disabled={isUploading}
-              className="rounded-lg bg-blue-500 px-4 py-1.5 text-xs font-semibold text-white hover:bg-blue-600 disabled:opacity-50"
-            >
-              {isUploading ? `⏳ Uploading (${Object.values(uploadStatus).filter((s) => s === 'done').length}/${selectedItems.size})...` : `📤 Upload ${selectedItems.size} Selected`}
-            </button>
-          )}
+          <span className="rounded-full border border-zinc-300 bg-white px-4 py-1.5 text-xs font-medium text-zinc-600">
+            B2 sẵn sàng: {selectedReadyCount} đã chọn | Toàn bộ: {totalReadyCount}
+          </span>
+
+          <button
+            onClick={handleUploadBatch}
+            disabled={isUploading || !(selectedReadyCount || totalReadyCount)}
+            className="rounded-lg bg-blue-500 px-4 py-1.5 text-xs font-semibold text-white hover:bg-blue-600 disabled:opacity-50"
+          >
+            {isUploading
+              ? '⏳ Uploading...'
+              : selectedItems.size > 0
+                ? `📤 Upload ${selectedItems.size} Selected (ưu tiên)`
+                : '📤 Upload toàn bộ có bước 2'}
+          </button>
         </div>
       </div>
+      {showProductSummary && (
+        <div className="mt-3 rounded-xl border border-cyan-200 bg-cyan-50/60 p-3">
+         
+          
+          <div className="mt-2" ref={productFilterMenuRef}>
+            {productFilterOptions.length > 1 ? (
+              <div className="relative inline-block">
+                <button
+                  type="button"
+                  onClick={() => setShowProductFilterMenu((prev) => !prev)}
+                  className="min-w-[220px] rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-left text-xs font-semibold text-white shadow-sm hover:bg-zinc-800"
+                >
+                  <span className="inline-flex w-full items-center justify-between gap-2">
+                    <span className="truncate">
+                      {selectedProduct === 'ALL' ? 'Tat ca san pham' : selectedProduct}
+                    </span>
+                    <span className="text-zinc-300">v</span>
+                  </span>
+                </button>
+
+                {showProductFilterMenu ? (
+                  <div className="absolute left-0 z-20 mt-2 max-h-72 min-w-[240px] overflow-auto rounded-xl border border-zinc-700 bg-zinc-900 p-1 shadow-xl">
+                    {productFilterOptions.map((productName) => {
+                      const isActive = selectedProduct === productName
+                      return (
+                        <button
+                          key={productName}
+                          type="button"
+                          onClick={() => {
+                            setSelectedProduct(productName)
+                            setShowProductFilterMenu(false)
+                          }}
+                          className={`flex w-full items-center rounded-lg px-3 py-2 text-left text-xs font-medium transition ${isActive
+                            ? 'bg-zinc-800 text-white'
+                            : 'text-zinc-200 hover:bg-zinc-800 hover:text-white'
+                            }`}
+                        >
+                          {productName}
+                        </button>
+                      )
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <span className="text-xs text-zinc-600">Không có sản phẩm nào đủ 5 cột yêu cầu.</span>
+            )}
+          </div>
+        </div>
+      )}
+      {mockupTemplatePath && (
+        <p className="mt-2 text-xs text-amber-700">
+          PSD template: {mockupTemplatePath}
+        </p>
+      )}
+      <p className={`mt-2 text-xs ${isElectronMockupAvailable ? 'text-emerald-700' : 'text-red-600'}`}>
+        {mockupBridgeStatus}
+      </p>
+      {!isElectronMockupAvailable && (
+        <p className="mt-2 text-xs text-red-600">
+          {isElectronRuntime
+            ? 'Electron đang mở nhưng preload bridge PSD chưa sẵn sàng. Đóng app và chạy lại npm.cmd run electron:dev.'
+            : 'PSD mockup không khả dụng trong web mode. Vui lòng chạy desktop app bằng Electron để chọn file PSD.'}
+        </p>
+      )}
 
       {data.length === 0 ? (
         <div className="mt-4 rounded-2xl border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-500">
@@ -820,7 +2130,7 @@ export default function HoloarcylicPage() {
                 mergePreviewOptions(
                   editorPreviewOptions,
                   editorPreviewHistory[
-                    buildEditorPreviewKey('lifestyle', globalIndex, imageIndex)
+                  buildEditorPreviewKey('lifestyle', globalIndex, imageIndex)
                   ] || []
                 )
 
@@ -834,7 +2144,7 @@ export default function HoloarcylicPage() {
                       <div className="rounded-lg bg-indigo-100 px-3 py-2 text-center font-mono text-sm font-semibold text-indigo-700">
                         STT: {row.stt}
                       </div>
-                      
+
                       <div className="text-xl font-semibold text-zinc-900">
                         {row.keyword || `Holographic Ornament ${itemNumber}`}
                       </div>
@@ -851,15 +2161,14 @@ export default function HoloarcylicPage() {
                           <button
                             onClick={() => handleUploadSingle(globalIndex)}
                             disabled={isUploading}
-                            className={`px-2 py-1 text-xs font-semibold rounded transition ${
-                              uploadStatus[globalIndex] === 'done'
+                            className={`px-2 py-1 text-xs font-semibold rounded transition ${uploadStatus[globalIndex] === 'done'
                                 ? 'bg-green-500 text-white'
                                 : uploadStatus[globalIndex] === 'uploading'
                                   ? 'bg-yellow-500 text-white'
                                   : uploadStatus[globalIndex] === 'error'
                                     ? 'bg-red-500 text-white'
                                     : 'bg-blue-500 text-white hover:bg-blue-600'
-                            }`}
+                              }`}
                           >
                             {uploadStatus[globalIndex] === 'done'
                               ? '✅ Done'
@@ -874,7 +2183,7 @@ export default function HoloarcylicPage() {
                     )}
                   </div>
 
-                  <div className="grid gap-5 xl:grid-cols-3">
+                  <div className="grid gap-5 xl:grid-cols-4">
                     <div>
                       <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
                         1. SOURCE COMPETITOR
@@ -958,47 +2267,49 @@ export default function HoloarcylicPage() {
                     <div>
                       <div className="mb-2 flex items-center justify-between gap-2">
                         <span className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
-                          3. LIFESTYLE CONTEXTS
+                          3. LIFESTYLE IMAGE
                         </span>
-                        {redesign?.base64 && (
-                          <button
-                            onClick={() => handleGenerateLifestyle(globalIndex)}
-                            disabled={lifestyle?.loading}
-                            className="text-xs font-medium text-emerald-500 hover:text-emerald-700 disabled:opacity-40"
-                          >
-                            {lifestyle?.loading ? '⏳ Đang tạo...' : '✨ Lifestyle'}
-                          </button>
-                        )}
+                        <button
+                          onClick={() => handleGenerateLifestyle(globalIndex)}
+                          disabled={lifestyle?.loading || !redesignDataUrl}
+                          className="text-xs font-medium text-emerald-600 hover:text-emerald-700 disabled:opacity-40"
+                        >
+                          {lifestyle?.loading ? '⏳ Đang tạo...' : '✨ Generate Lifestyle'}
+                        </button>
                       </div>
                       <div className="flex h-96 items-center justify-center rounded-xl border border-zinc-300 bg-zinc-100 overflow-hidden">
-                        {lifestyle?.loading ? (
-                          <div className="flex flex-col items-center gap-2 text-zinc-400">
-                            <div className="h-8 w-8 animate-spin rounded-full border-2 border-emerald-400 border-t-transparent" />
-                            <span className="text-xs">Đang tạo lifestyle với AI...</span>
-                          </div>
-                        ) : lifestylePreviewImages.length > 0 ? (
+                        {lifestylePreviewImages.length > 0 ? (
                           <div className="h-full w-full overflow-auto p-2">
+                            {lifestyle?.loading ? (
+                              <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-semibold text-emerald-700">
+                                <div className="h-3 w-3 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent" />
+                                Đang tạo thêm ảnh lifestyle...
+                              </div>
+                            ) : null}
                             <div className="grid grid-cols-2 gap-2">
-                              {lifestylePreviewImages.map((image, imageIndex) => (
-                                <img
-                                  key={`${globalIndex}-lifestyle-${imageIndex}`}
-                                  src={`data:${image.mimeType || 'image/png'};base64,${image.base64}`}
-                                  alt={`lifestyle-result-${row.keyword}-${imageIndex + 1}`}
-                                  className="h-44 w-full cursor-zoom-in rounded-lg object-cover"
-                                  loading="lazy"
-                                  onClick={() =>
-                                    setEditorState({
-                                      kind: 'lifestyle',
-                                      globalIndex,
-                                      imageIndex,
-                                      src: `data:${image.mimeType || 'image/png'};base64,${image.base64}`,
-                                      title: `${row.keyword || `Item ${itemNumber}`} lifestyle ${imageIndex + 1}`,
-                                      description: 'Ảnh lifestyle sau khi lưu sẽ thay trực tiếp vào ô preview hiện tại.',
-                                      previewOptions: getLifestyleEditorPreviewOptions(imageIndex),
-                                    })
-                                  }
-                                />
-                              ))}
+                              {lifestylePreviewImages.map((image, imageIndex) => {
+                                const lifestyleSrc = `data:${image.mimeType || 'image/png'};base64,${image.base64}`
+                                return (
+                                  <img
+                                    key={`${globalIndex}-lifestyle-${imageIndex}`}
+                                    src={lifestyleSrc}
+                                    alt={`lifestyle-${row.keyword || itemNumber}-${imageIndex + 1}`}
+                                    className="h-44 w-full cursor-zoom-in rounded-lg object-cover"
+                                    loading="lazy"
+                                    onClick={() =>
+                                      setEditorState({
+                                        kind: 'lifestyle',
+                                        globalIndex,
+                                        imageIndex,
+                                        src: lifestyleSrc,
+                                        title: `${row.keyword || `Item ${itemNumber}`} lifestyle ${imageIndex + 1}`,
+                                        description: 'Lifestyle sẽ được gửi kèm khi update sheet nếu có.',
+                                        previewOptions: getLifestyleEditorPreviewOptions(imageIndex),
+                                      })
+                                    }
+                                  />
+                                )
+                              })}
                             </div>
                           </div>
                         ) : lifestyle?.error ? (
@@ -1006,20 +2317,152 @@ export default function HoloarcylicPage() {
                             <span className="text-2xl">⚠️</span>
                             <span className="text-xs text-red-500">{lifestyle.error}</span>
                           </div>
-                        ) : lifestyle?.raw ? (
-                          <div className="px-4 text-center text-xs text-zinc-500">
-                            Backend đã trả dữ liệu lifestyle nhưng không có ảnh để preview.
+                        ) : lifestyle?.loading ? (
+                          <div className="flex flex-col items-center gap-2 text-zinc-400">
+                            <div className="h-8 w-8 animate-spin rounded-full border-2 border-emerald-400 border-t-transparent" />
+                            <span className="text-xs">Đang tạo lifestyle...</span>
                           </div>
-                        ) : !redesign?.base64 ? (
-                          <span className="text-sm text-zinc-400">Bấm ✨ Create Master để tạo redesign trước</span>
                         ) : (
-                          <span className="text-sm text-zinc-400">Bấm ✨ Lifestyle để tạo ảnh lifestyle</span>
+                          <span className="text-sm text-zinc-400">Bấm Generate để tạo lifestyle</span>
                         )}
                       </div>
+                      {lifestylePreviewImages.length > 0 ? (
+                        <div className="mt-2 flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadAllLifestyle(globalIndex)}
+                            className="flex-1 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                          >
+                            📥 Tải toàn bộ
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setLifestyleResults((prev) => ({
+                                ...prev,
+                                [globalIndex]: {
+                                  ...(prev[globalIndex] || {}),
+                                  loading: false,
+                                  base64: null,
+                                  mimeType: null,
+                                  images: [],
+                                  analysis: null,
+                                  mockup: null,
+                                  raw: null,
+                                  error: null,
+                                },
+                              }))
+                            }
+                            className="flex-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-100"
+                          >
+                            Xóa toàn bộ lifestyle
+                          </button>
+                        </div>
+                      ) : null}
                       <p className="mt-2 text-xs text-zinc-500 italic">
-                        Focus: Places existing design into premium interior environments.
+                        Lifestyle có thì upload, không có thì bỏ qua.
                       </p>
-                    
+                    </div>
+
+                    <div>
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-amber-700">
+                          4. MOCKUP TỰ CHỌN
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleGenerateMockupFromTemplate(globalIndex, redesignDataUrl)}
+                          disabled={mockupRenderStatus[globalIndex] === 'loading' || !redesignDataUrl || !isElectronMockupAvailable}
+                          className="text-xs font-medium text-amber-600 hover:text-amber-700 disabled:opacity-40"
+                          title={!isElectronMockupAvailable ? 'Chỉ chạy trong Electron desktop app' : ''}
+                        >
+                          {mockupRenderStatus[globalIndex] === 'loading' ? '⏳ Đang render...' : '✨ Generate từ PSD'}
+                        </button>
+                      </div>
+                      <div className="flex h-96 items-center justify-center rounded-xl border border-zinc-300 bg-zinc-100 overflow-hidden">
+                        {getMockupPreviewImages(globalIndex).length > 0 ? (
+                          <div className="h-full w-full overflow-auto p-2">
+                            <div className="grid grid-cols-2 gap-2">
+                              {getMockupPreviewImages(globalIndex).map((image, imageIndex) => (
+                                <img
+                                  key={`${globalIndex}-custom-mockup-${imageIndex}`}
+                                  src={image.dataUrl}
+                                  alt={`custom-mockup-${row.keyword || itemNumber}-${imageIndex + 1}`}
+                                  className="h-44 w-full cursor-zoom-in rounded-lg object-cover"
+                                  loading="lazy"
+                                  onClick={() =>
+                                    setEditorState({
+                                      kind: 'customMockup',
+                                      globalIndex,
+                                      src: image.dataUrl,
+                                      title: `${row.keyword || `Item ${itemNumber}`} custom mockup ${imageIndex + 1}`,
+                                      description: 'Mockup tự chọn để tham khảo nội bộ và gửi kèm khi update sheet.',
+                                      previewOptions: getAllMockupImages(globalIndex).map((preview, idx) => ({
+                                        id: `custom-mockup-${idx}`,
+                                        label: preview?.name || `Mockup ${idx + 1}`,
+                                        src: preview.dataUrl,
+                                      })),
+                                    })
+                                  }
+                                />
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-sm text-zinc-400">Chọn ảnh mockup của bạn</span>
+                        )}
+                      </div>
+                      <div className="mt-2 flex items-center gap-2">
+                        {customMockups[globalIndex]?.dataUrl && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              // Clean up: remove from state, ref, renderedCount, and localStorage
+                              delete mockupImagesRef.current[globalIndex]
+                              setRenderedMockupImagesCount((prev) => {
+                                const next = { ...prev }
+                                delete next[globalIndex]
+                                return next
+                              })
+                              setCustomMockups((prev) => {
+                                const next = { ...prev }
+                                delete next[globalIndex]
+                                // Force localStorage update immediately
+                                writeStoredJson(CUSTOM_MOCKUPS_STORAGE_KEY, next)
+                                return next
+                              })
+                            }}
+                            className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50"
+                          >
+                            Xóa toàn bộ mockup
+                          </button>
+                        )}
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        <span className="text-[11px] font-semibold text-zinc-500">Template riêng:</span>
+                        {mockupTemplateHistory.slice(0, 6).map((filePath) => {
+                          const isActiveTemplate = filePath === getItemMockupTemplatePath(globalIndex)
+                          return (
+                            <button
+                              key={`${globalIndex}-${filePath}`}
+                              type="button"
+                              onClick={() => setItemMockupTemplatePath(globalIndex, filePath)}
+                              className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${isActiveTemplate
+                                  ? 'border-amber-400 bg-amber-50 text-amber-700'
+                                  : 'border-zinc-300 bg-white text-zinc-600 hover:border-amber-300 hover:text-amber-700'
+                                }`}
+                            >
+                              {getFileNameFromPath(filePath)}
+                            </button>
+                          )
+                        })}
+                        {!mockupTemplateHistory.length ? (
+                          <span className="text-[11px] text-zinc-500">Đang dùng template mặc định.</span>
+                        ) : null}
+                      </div>
+                      <p className="mt-2 text-xs text-zinc-500 italic">
+                        Ảnh mockup tự chọn sẽ được upload kèm khi update sheet.
+                      </p>
                     </div>
                   </div>
                 </article>
@@ -1074,6 +2517,11 @@ export default function HoloarcylicPage() {
           </div>
         </>
       )}
+      <ListedItemsModal
+        isOpen={isListedItemsModalOpen}
+        onClose={() => setIsListedItemsModalOpen(false)}
+        sheetUrl={localStorage.getItem('holoSheetUrl') || localStorage.getItem('holoarcylicSheetUrl') || localStorage.getItem('ornamentSheetUrl') || ''}
+      />
     </section>
   )
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { LoaderCircle, Pencil, Plus, RefreshCw, Shield, UserRound } from 'lucide-react'
+import { FileText, LoaderCircle, Pencil, Plus, RefreshCw, Shield, Trash2, UserRound } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchAdminUsers, upsertAdminUser } from '../services/adminUserService'
 
@@ -7,12 +7,15 @@ const PRODUCT_TYPE_OPTIONS = [
 	{ id: 1, label: 'Sticker' },
 	{ id: 2, label: 'Ornament' },
 	{ id: 3, label: 'Suncatcher' },
+	{ id: 4, label: 'Admin' },
+	{ id: 5, label: 'Mockup' },
+	{ id: 6, label: 'Patch' },
 ]
 
 const ROLE_CODE_OPTIONS = [
 	'admin',
-	'seller',
-	'parttime',
+	'Amazon',
+	'Etsy',
 ]
 
 const PERMISSION_CODE_OPTIONS = [
@@ -47,7 +50,7 @@ const normalizeUser = (user) => ({
 	username: String(user?.username || ''),
 	email: String(user?.email || ''),
 	password: '',
-	full_name: String(user?.full_name || ''),
+	full_name: String(user?.full_name || user?.name || user?.fullName || ''),
 	role_code: String(user?.role_code || 'seller'),
 	status: Number(user?.status ?? 1),
 	product_type_ids: Array.isArray(user?.product_types) ? user.product_types.map(Number) : [],
@@ -153,7 +156,6 @@ function UserEditModal({ user, onClose, onSave }) {
 		const nextErrors = {}
 
 		if (!String(form.username || '').trim()) nextErrors.username = 'Vui lòng nhập username'
-		if (!String(form.full_name || '').trim()) nextErrors.full_name = 'Vui lòng nhập tên hiển thị'
 		if (!String(form.role_code || '').trim()) nextErrors.role_code = 'Vui lòng chọn role'
 		if (!Number.isFinite(Number(form.status))) nextErrors.status = 'Vui lòng chọn status'
 		if (!Array.isArray(form.product_type_ids) || form.product_type_ids.length === 0) {
@@ -443,14 +445,66 @@ export default function AdminPage() {
 	const [error, setError] = useState('')
 	const [searchText, setSearchText] = useState('')
 	const [editingUser, setEditingUser] = useState(null)
+	const [logPath, setLogPath] = useState('')
+	const [logText, setLogText] = useState('')
+	const [logLoading, setLogLoading] = useState(false)
+	const [logError, setLogError] = useState('')
 	const displayName = user?.name || user?.full_name || user?.username || 'Admin'
+
+	const loadLogText = async () => {
+		if (!window?.offorestLogger?.read) {
+			setLogError('Log viewer chỉ khả dụng trong Electron app.')
+			return
+		}
+
+		setLogLoading(true)
+		setLogError('')
+		try {
+			const result = await window.offorestLogger.read({ maxChars: 250000 })
+			setLogText(String(result?.text || ''))
+			setLogPath(String(result?.path || ''))
+		} catch (err) {
+			setLogError(err?.message || 'Không thể đọc log.txt')
+		} finally {
+			setLogLoading(false)
+		}
+	}
+
+	const clearLogText = async () => {
+		if (!window?.offorestLogger?.clear) {
+			setLogError('Log viewer chỉ khả dụng trong Electron app.')
+			return
+		}
+
+		const confirmed = window.confirm('Bạn có chắc muốn xóa toàn bộ nội dung log.txt?')
+		if (!confirmed) return
+
+		setLogLoading(true)
+		setLogError('')
+		try {
+			const result = await window.offorestLogger.clear()
+			setLogPath(String(result?.path || ''))
+			setLogText('')
+		} catch (err) {
+			setLogError(err?.message || 'Không thể xóa log.txt')
+		} finally {
+			setLogLoading(false)
+		}
+	}
 
 	const loadUsers = async () => {
 		setLoading(true)
 		setError('')
 		try {
 			const response = await fetchAdminUsers()
-			setUsers(Array.isArray(response?.users) ? response.users : [])
+			setUsers(
+				Array.isArray(response?.users)
+					? response.users.map((item) => ({
+						...item,
+						full_name: String(item?.full_name || item?.name || item?.fullName || ''),
+					}))
+					: []
+			)
 			setVertexRows(
 				Array.isArray(response?.vertex)
 					? response.vertex.map(normalizeVertexRow)
@@ -467,6 +521,10 @@ export default function AdminPage() {
 
 	useEffect(() => {
 		loadUsers()
+	}, [])
+
+	useEffect(() => {
+		loadLogText()
 	}, [])
 
 	const filteredUsers = useMemo(() => {
@@ -491,7 +549,10 @@ export default function AdminPage() {
 
 	const handleSaveUser = async (payload) => {
 		const result = await upsertAdminUser(payload)
-		const nextUser = result?.user || result?.data?.user || payload
+		const nextUser = {
+			...(result?.user || result?.data?.user || payload),
+			full_name: String((result?.user || result?.data?.user || payload)?.full_name || (result?.user || result?.data?.user || payload)?.name || (result?.user || result?.data?.user || payload)?.fullName || ''),
+		}
 
 		setUsers((prev) => {
 			const existsIndex = prev.findIndex((item) => Number(item.user_id) === Number(nextUser.user_id))
@@ -710,6 +771,47 @@ export default function AdminPage() {
 							)}
 						</tbody>
 					</table>
+				</div>
+			</div>
+
+			<div className="mt-6 overflow-hidden rounded-3xl border border-zinc-200 bg-white">
+				<div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-200 px-4 py-3">
+					<div>
+						<p className="text-sm font-semibold text-zinc-900">Application Log</p>
+						<p className="text-xs text-zinc-500">{logPath || 'log.txt trong userData'}</p>
+					</div>
+					<div className="flex items-center gap-2">
+						<button
+							type="button"
+							onClick={loadLogText}
+							disabled={logLoading}
+							className="inline-flex items-center gap-2 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-700 disabled:opacity-50"
+						>
+							<RefreshCw className={`h-4 w-4 ${logLoading ? 'animate-spin' : ''}`} />
+							Refresh Log
+						</button>
+						<button
+							type="button"
+							onClick={clearLogText}
+							disabled={logLoading}
+							className="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700 disabled:opacity-50"
+						>
+							<Trash2 className="h-4 w-4" />
+							Clear Log
+						</button>
+					</div>
+				</div>
+				{logError ? (
+					<p className="px-4 py-3 text-xs text-red-600">{logError}</p>
+				) : null}
+				<div className="px-4 py-3">
+					<div className="mb-2 inline-flex items-center gap-2 rounded-full bg-zinc-100 px-3 py-1 text-xs text-zinc-600">
+						<FileText className="h-3.5 w-3.5" />
+						{logText ? `${logText.length} chars` : 'No log yet'}
+					</div>
+					<pre className="max-h-[420px] overflow-auto rounded-2xl border border-zinc-200 bg-zinc-950 p-4 text-xs leading-5 text-zinc-100">
+						{logText || 'log.txt đang trống.'}
+					</pre>
 				</div>
 			</div>
 

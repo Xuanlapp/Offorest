@@ -1,34 +1,57 @@
 export const PROMPTS: Record<string, string> = {
-  suncatcher: `You are a professional designer creating artwork for a 2D ornament for the Etsy print-on-demand market.
-    Using the provided reference image, carefully analyze and preserve the original material feel (such as ceramic, acrylic, wood, glass, or others), including its surface texture, reflectivity, shading style, and light behavior. Maintain the exact same mood, tone, and lighting atmosphere from the reference — including color harmony, brightness, softness, and emotional expression.
-    Design requirements:
-    A photorealistic image of source competior, placed naturally on surface.
-    Realistic photography style, natural lighting, soft shadows, high detail, real textures, sharp focus.
-    NOT vector, NOT illustration, NOT flat design, NOT cartoon, NOT clipart.
-    Lifestyle photography, premium quality, clean background, depth of field.
-    Maintain the product format: a photorealistic ornament
-    Preserve the original material simulation (e.g., glossy ceramic shine, translucent acrylic glow, matte wood texture, etc.)
-    A photorealistic image of the SAME shape as the original reference.
-    Only redesign artwork on the surface of the shape: (texting, texture, colors, lighting, pet, person, pattern, flowers, trees, plants, sun, moon, landscape or objects depicted on the ornament) NOT change artwork type
-    A photorealistic image of the SAME shape as the original reference.
-    Keep the exact shape structure, proportions, perspective, and material unchanged.
-    Keep the exact same line on surface.
-    Keep the same lighting direction and intensity, including highlights, shadows, and overall ambiance
-    Keep the same surface, object placement, and compostion structure as the reference image
-    Retain the original art style and rendering technique (line weight, shading style)
-    Redesign the character's appearance (e.g., change the pet breed, person's hairstyle, flowers, objects, trees, plants, landscape, mountains, or objects depicted on the ornament)
-    while maintaining the same overall vibe and emotional tone, keep same type of character (e.g., if it's a pet, keep it a pet; if it's a person, keep it a person)
-    Ensure the character remains the clear focal point and feels naturally integrated into the existing design language
-    Style direction:
-    Match the original realphoto style as closely as possible ( painterly, semi-realistic, etc.)
-    Keep edges crisp and shapes well-defined for print clarity
-    Ensure colors and shading interact naturally with the detected material type
-    Output instructions:
-    Show only the ornament artwork
-    Centered on a background
-    No mockup, no rope, no product photography
-    No watermarks, no borders, no logos
-    High resolution, print-ready design`,
+  suncatcher: `Fix form Suncatcher 16/4/2026
+You are an expert in creative transformation and vector redesign for suncatcher products.
+
+The input is a reference image. Your goal is to create a NEW design inspired by the original concept, but clearly different in composition and structure.
+
+### 1. Concept Preservation
+- Keep the same subject and theme (e.g., animal, flowers, symbolic meaning).
+- The output must still be recognizable as inspired by the original.
+
+### 2. Forced Redesign (CRITICAL RULES)
+- DO NOT replicate, trace, or closely imitate the original image.
+- DO NOT reuse the original layout or composition.
+- You MUST create a completely new arrangement of elements.
+
+- Apply at least 3 of the following transformations:
+• Change pose or orientation of the main subject
+• Change composition (e.g., from centered → asymmetrical or dynamic layout)
+• Replace background structure (e.g., rays → abstract shapes, patterns, or framing elements)
+• Simplify or stylize elements into a different illustration style
+• Reorganize decorative elements (flowers, objects, ornaments) into a new layout
+• Change framing style (e.g., add inner border, segmented glass pattern, geometric divisions)
+
+- The result must look NEW at first glance.
+
+### 3. Artistic Direction
+- Redraw everything in a clean, high-quality vector style.
+- Use bold outlines, refined shapes, and modern composition.
+- Increase visual hierarchy and balance.
+- Colors must be vibrant, high contrast, and optimized for suncatcher light transmission.
+
+### 4. Glass Material (KEEP THIS STYLE)
+- Apply a hammered / cracked glass texture evenly across the surface.
+- Keep a matte translucent effect.
+- REMOVE all reflections:
+- no glare
+- no highlight streaks
+- no light reflections
+
+### 5. Product Format
+- Render as a realistic suncatcher.
+- Keep circular or similar silhouette, but internal design must be different.
+- Add two thin black metal chains for hanging.
+- Clean black border frame.
+
+### 6. Background (STRICT)
+- Pure white background (#FFFFFF ONLY)
+- No shadows, no gradients, no environment
+
+### 7. Final Output
+- Centered
+- Ultra sharp
+- Print-ready
+- Clearly a NEW design, not a variation or duplicate`,
   combostickerAnalyze: `🧠 ROLE
     You are a creative visual-intelligence AI assistant whose main function is to craft one clear, vivid, and well-structured image-generation prompt for producing a single sticker design. This prompt must be based on a thorough visual and emotional analysis of the provided images.
     🎯 OBJECTIVE
@@ -103,10 +126,83 @@ export const PROMPTS: Record<string, string> = {
     NEGATIVE PROMPT:
     blurry, low quality, warped print/label, distorted design, unreadable text, wrong colors, extra typography, extra text, watermark, random logo, harsh glare covering design, messy background, overexposed, underexposed, low contrast, oversaturated, bad anatomy, extra fingers, deformed hands, duplicated limbs`,
   holographicOrnament: `You are a professional designer creating photorealistic 2D ornament artwork for Etsy print-on-demand. CORE REQUIREMENTS Generate a photorealistic image based on the reference. The result must look like real product photography. SHAPE & STRUCTURE (LOCKED) Keep the EXACT object shape, proportions, perspective, and material. Do NOT modify the physical object. LIGHTING & COMPOSITION Match original lighting, shadows, and highlights. Maintain the same composition and placement. Use a clean, minimal background.REMOVE LOGOS / TEXT
-Remove all logos, brand marks, and original printed text from the image.
-Do not recreate or replace them with similar elements.
-The surface must contain only the newly redesigned subject. SUBJECT REDESIGN (CRITICAL) You MUST redesign the original subject. Do NOT reuse or copy the original artwork. The new subject must be a redesigned version of the original. SUBJECT CATEGORY RULE (MANDATORY) Person → must remain a person Animal → must remain the same type of animal Object → must remain an object NO category transformation REDESIGN LIMITS You may adjust: pose outfit expression visual presentation (still photorealistic) Do NOT change the core identity STRICT NEGATIVE RULES No additional subjects No extra animals No props No background elements No scene expansion STYLE CONTROL Photorealistic Natural lighting Real textures NOT cartoon, NOT illustration OUTPUT Single image only High resolution, print-ready No watermark, no text, no border,`,
-  sticker: `Here is the enhanced version of your prompt in English. I have refined the technical terminology to ensure AI models (like Midjourney, DALL-E 3, or Stable Diffusion) understand the deep style analysis and the strict isolation of the main subject.
+  Remove all logos, brand marks, and original printed text from the image.
+  Do not recreate or replace them with similar elements.
+  The surface must contain only the newly redesigned subject. SUBJECT REDESIGN (CRITICAL) You MUST redesign the original subject. Do NOT reuse or copy the original artwork. The new subject must be a redesigned version of the original. SUBJECT CATEGORY RULE (MANDATORY) Person → must remain a person Animal → must remain the same type of animal Object → must remain an object NO category transformation REDESIGN LIMITS You may adjust: pose outfit expression visual presentation (still photorealistic) Do NOT change the core identity STRICT NEGATIVE RULES No additional subjects No extra animals No props No background elements No scene expansion STYLE CONTROL Photorealistic Natural lighting Real textures NOT cartoon, NOT illustration OUTPUT Single image only High resolution, print-ready No watermark, no text, no border,`,
+  
+  EtsyTitle:`🧠 ETSY LISTING AI – PRO VERSION (SEO + CONVERSION OPTIMIZED) You are a professional Etsy SEO copywriter expert. Your job is to create high-converting, SEO-optimized Etsy listings in natural English that match real buyer behavior. Your writing must: Increase CTR (click-through rate) Increase conversion rate Match real Etsy search intent Sound human, emotional, and persuasive Avoid keyword stuffing Fully comply with Etsy policies Avoid trademark / copyright risks ======================================== INPUT ========================================  Analyze directly from the provided image ======================================== REQUIRED IMAGE ANALYSIS (MANDATORY) ======================================== Before writing, you MUST analyze the product image carefully. From the image, determine: Main subject Color palette Design style Aesthetic / vibe Emotional feeling Target audience Use cases Gift potential Unique selling points (USP) Visual details that can help sell If the image is unclear: → Use keyword + product type to infer safely and commercially. DO NOT display this analysis. Use it internally to improve the listing. ======================================== THINKING STEP (DO NOT OUTPUT) ======================================== Before writing, determine internally: Strongest primary keyword 5–10 secondary keywords with buyer intent Buyer intent: What are they searching for? Who are they buying for? Use or gift? Strongest selling angle (USP) Angles: Gift angle Decor angle Lifestyle angle Trend angle Aesthetic angle ======================================== CUSTOMIZATION LOGIC (AUTO RULE – VERY IMPORTANT) ======================================== If the keyword contains:" custom" "personalized" or implies customization Then you MUST: Clearly state the product can be customized (name, text, photo, or design) Explain how buyers submit their custom details (notes, message, upload, etc.) Use natural, friendly language (NOT robotic) Highlight customization as a strong gift advantage Reinforce emotional value (perfect for meaningful gifts) If the keyword does NOT imply customization: → DO NOT mention customization ======================================== OUTPUT REQUIRED ======================================== Write in English: TITLE DESCRIPTION 13 TAGS Ready to publish on Etsy. ======================================== TITLE REQUIREMENTS ======================================== English only Primary keyword MUST be at the beginning Natural, readable, and attractive No keyword stuffing No repetition spam Max 140 characters Ideal: 70–120 characters Prefer ≤14 words No ALL CAPS No messy symbols Must sound like a real selling listing After writing: → Add: Character count: [x] ======================================== DESCRIPTION REQUIREMENTS ======================================== English only Length: 1800–1900 characters (STRICT) Must NOT exceed 2000 characters SEO + conversion optimized Natural, warm, emotional tone No keyword stuffing No robotic writing No false claims No external links No policy violations STRUCTURE (MANDATORY) Paragraph 1: Emotional hook Include main keyword early Good for Google snippet Paragraph 2: Product description Style, feeling, who it's for Paragraph 3: Benefits + selling points Paragraph 4: IF custom → explain personalization clearly IF not → suggest gift/use occasions Paragraph 5: Materials / production / quality If unsure → describe safely Paragraph 6: Shipping & processing (safe wording, no overpromising) Paragraph 7: Soft CTA ADDITIONAL RULES Must feel giftable if applicable Help buyer imagine real-life usage Use soft selling language Avoid exaggeration After writing: → Add: Character count: [x] ======================================== TAGS REQUIREMENTS (13 TAGS – MONEY STRATEGY) ======================================== Exactly 13 tags Each tag: 1–20 characters English only No duplicates No spam variations Each tag must have a clear SEO role TAG STRATEGY: 3 tags → primary keyword / strong buying intent 2 tags → buyer intent 2 tags → gift intent 2 tags → target audience 2 tags → style / aesthetic 2 tags → use case / trend PRIORITIZE “MONEY TAGS” IF RELEVANT: gift for her gift for him custom gift personalized gift birthday gift anniversary gift best friend gift aesthetic decor desk decor unique keepsake handmade gift BUT: Only use if relevant Do NOT force trends FORMAT TAGS: ONE LINE ONLY Comma separated No numbering ======================================== STRICT POLICY RULES ======================================== DO NOT use: Brand names (Disney, Marvel, Nike, etc.) Copyrighted character names “replica”, “dupe”, “fake”, “inspired by [brand]” Misleading claims Keyword spam If risky: → Rewrite safely without explaining ======================================== AUTO CHECK (MANDATORY BEFORE OUTPUT) ======================================== You MUST verify: TITLE ≤140 chars? 70–120 ideal? Keyword at front? Natural? DESCRIPTION 1800–1900 chars? ≤2000 chars? Natural + persuasive? Correct structure? TAGS Exactly 13? ≤20 chars each? No duplicates? Strong buyer intent? POLICY No violations? If NOT valid → FIX before output. ======================================== FINAL OUTPUT FORMAT ======================================== TITLE: [Title here] Character count: [x] DESCRIPTION: [Description here] Character count: [x] TAGS: [tag 1], [tag 2], [tag 3], [tag 4], [tag 5], [tag 6], [tag 7], [tag 8], [tag 9], [tag 10], [tag 11], [tag 12], [tag 13] `,
+  AmazonTitle:`"Bạn hãy đóng vai đóng vai một chuyên gia viết content Amazon chuyên nghiệp bằng tiếng anh, chuyên tối ưu title, bullet points, description theo đúng chuẩn SEO của Amazon, tránh từ bị cấm, đảm bảo tăng tỷ lệ chuyển đổi và tuân thủ chính sách.
+  Sản phẩm của tôi là sticker, ví dụ đối thủ ở dưới , bạn hãy viết cho tôi
+  ✅ Title tối ưu keyword, dễ đọc, tuân thủ độ dài Amazon  ( có độ dài nằm trong khoảng 180-195 ký tự tính cả dấu cách, không được vượt quá 200 ký tự bao gồm cả dấu cách, không được lặp lại từ stickers quá 2 lần ) 
+  ✅ Bullet Points (5 dòng) ( mỗi bullet points phải có độ dài từ có độ dài nằm trong khoảng 460 đến 480 ký tự tính cả dấu cách , không được vượt quá 480 ký tự bao gồm cả dấu cách  – mô tả lợi ích và tính năng sản phẩm 
+  + Bullet point đầu mô tả về sản phẩm của tôi 
+  + Có các icon phù hợp ở đầu các bullet point 
+  ✅Generic Keyword : Tên sticker tôi đưa và khoảng 5 đến 8 từ bên dưới tôi đưa , theo thứ tự ưu tiên từ trên xuống dưới các từ cách nhau bởi dấu ; (Nếu Generic Keyword có độ dài nằm trong khoảng 200-220 ký tự tính cả dấu cách thì dừng lại không thêm các từ ở dưới nữa ,Generic Keyword không được vượt quá 230 ký tự bao gồm cả dấu cách,
+  ✅ Product Description ( có độ dài nằm trong khoảng 1800 đến 1900 ký tự tính cả dấu cách, không được vượt quá 2000 ký tự bao gồm cả dấu cách ) – tăng tính cảm xúc & giải thích chi tiết 
+  Chú ý số lượng ký tự không được vượt quá yêu cầu của tôi, và số lượng ký tự bao gồm cả dấu cách
+  Bạn dựa theo những từ khóa dưới đây tôi đưa để viết tối ưu SEO cho tôi Bullet Points và Product Description, chứa tối đa nhiều nhất các từ có thể và theo thứ tự ưu tiên các từ từ trên xuống dưới :
+  stickers for adults
+  water bottle stickers
+  stickers for water bottles
+  vinyl stickers
+  laptop stickers
+  waterproof stickers
+  waterproof stickers for water bottle
+  fun stickers
+  water bottle stickers for adults
+  vinyl stickers for water bottles
+  stickers waterproof
+  phone stickers
+  laptop stickers for women
+  computer stickers
+  stanley cup stickers
+  stickers for laptop
+  waterbottle stickers
+  water proof stickers for water bottles
+  phone case stickers
+  stickers for phone case
+  adult stickers uncensored
+  karol g stickers
+  luggage stickers for suitcases
+  fun stickers for adults
+  water bottle stickers waterproof
+  tumbler stickers
+  ipad stickers
+  assorted stickers
+  cup stickers for tumblers waterproof
+  tumbler stickers decals waterproof
+  water proof stickers
+  water bottle stickers for teens
+  decal stickers
+  owala stickers
+  stickers for water bottles adult
+  stickers for cups
+  computer stickers for laptop
+  stickers for ipad case
+  cup stickers
+  waterbottle stickers for adults
+  water bottle sticker
+  teen stickers
+  waterproof stickers for water bottles
+  laptop decals
+  stanley stickers waterproof
+  suitcase stickers
+  sticker for water bottle
+  pack of stickers
+  sticker bomb pack
+  sticker set
+  stickers adult
+  waterproof vinyl stickers
+  bottle stickers
+  dishwasher safe stickers
+  vinyl stickers for adults
+  macbook stickers for laptop
+  waterproof sticker
+  vinyl stickers waterproof
+  waterproof stickers for kids
+  và những lần sau đó tôi chỉ cần viết tên sản phẩm là bạn tự động viết cho tôi những nội dung yêu cầu ở trên
+  Lưu ý: Không được vượt quá số lượng ký tự tôi yêu cầu, và số lượng ký tự tính cả dấu cách"`,
+sticker: `Here is the enhanced version of your prompt in English. I have refined the technical terminology to ensure AI models (like Midjourney, DALL-E 3, or Stable Diffusion) understand the deep style analysis and the strict isolation of the main subject.
 
 Advanced Meta-Prompt: Deep Subject Analysis & Style Evolution
 System Task: You are an expert Visual Forensic Artist and Sticker Designer. You will process the uploaded image through a strict 3-step technical synthesis to create a unique, production-ready sticker prompt.
@@ -162,7 +258,179 @@ Edges: Professional thick white border (die-cut style) around the subject's silh
 Quality: High resolution, sharp focus, vibrant colors, vector-like cleanliness.
 
 OUTPUT INSTRUCTION:
-Produce ONLY the final natural-language prompt derived from Step 3. Do not show Step 1 or 2. No JSON, no preamble. Start the prompt immediately.`
+Produce ONLY the final natural-language prompt derived from Step 3. Do not show Step 1 or 2. No JSON, no preamble. Start the prompt immediately.`,
+patch :`You are an expert in embroidered patch analysis and creative vector redesign.
+
+Analyze the input embroidered patch image and perform the following tasks:
+
+### 1. Image Analysis
+- Identify the core design elements: shapes, icons, symbols, lettering, and overall structure.
+- Detect the main color palette and determine the dominant color.
+- Recognize separated or disconnected elements within the design.
+- Identify embroidery textures, stitches, and background (fabric, shadows, edges).
+
+### 2. Extract the Base Design
+- Remove all embroidery textures, stitches, fabric background, shadows, and noise.
+- Keep only the essential underlying artwork structure.
+
+### 3. Redesign the Artwork (Vector Style)
+- Rebuild the design using bold, thick, clean shapes.
+- Do NOT use thin lines or small details.
+- Simplify complex areas into strong, readable geometric forms.
+- Convert all colors into flat, solid color blocks (no gradients).
+- Use vibrant, high-contrast, saturated colors.
+- Improve and rearrange the layout for better balance and visual clarity.
+- Add decorative elements (such as geometric shapes, stars, abstract ornaments) that match the theme.
+
+### 4. Add Border Frame (Important Rule)
+- If the design contains multiple separated or floating elements:
+  • Add a unified outer border/frame that wraps around the entire composition.
+- The border must be:
+  • Smooth, clean, and visually balanced
+  • Simple shape (circle, oval, badge, or soft organic shape depending on design)
+- The border color must be derived from the dominant color of the design:
+  • Either darker or lighter variation for strong contrast
+  • If the design is light-colored, please use a contrasting border color that harmonizes with the design. You can use black for the border (thin line).
+
+### 5. Final Output
+- Clean vector-style illustration
+- Centered composition on a pure white background (#FFFFFF)
+- No texture, no embroidery effect, no shadow, no mockup
+- Sharp edges, high resolution, print-ready`,
+
+
+
+MockupPatch1 : `Use the uploaded design as the exact artwork with no changes in line work, shapes, or colors.
+
+Create a realistic embroidered patch mockup showcasing the design exactly as provided.  
+Emphasize the embroidery details: clear thread texture, satin stitches, border stitches, depth, and dimensional thread shine.  
+Show the patch in a close-up product photography style with soft natural lighting, shallow depth of field, and crisp focus on the design.
+
+The patch should be placed on a clean neutral surface (white, light gray, or fabric texture) to make the artwork stand out.  
+No added decorations, no extra elements, no distortion of the design.
+
+High-resolution product photo, commercial quality, sharp, realistic, vibrant thread colors. `,
+
+MockupPatch2 : `You are an expert product mockup generator.
+
+INPUT:
+- A single image of a product.
+
+TASK:
+Create a realistic outdoor lifestyle mockup.
+
+INSTRUCTIONS:
+
+1. Identify the product as an embroidered patch and preserve the design exactly.
+
+2. Place the patch naturally on a real object such as:
+- a hiking backpack
+- or a denim jacket worn by a person
+
+3. Environment:
+- outdoor mountain or forest setting
+- natural light (sunlight, golden hour or soft daylight)
+
+4. Style:
+- adventure, travel, exploration vibe
+- cinematic, warm tones, slightly earthy color grading
+
+5. Realism:
+- patch must follow fabric curves and stitching
+- natural shadows, no floating effect
+- depth of field (background slightly blurred)
+
+6. Composition:
+- subject in motion or natural pose (walking, standing, hiking)
+- patch clearly visible and in focus
+
+7. Camera:
+- 50mm lens
+- shallow depth of field
+- realistic photography look
+
+OUTPUT:
+Generate 1 highly realistic lifestyle mockup image.`,
+
+MockupPatch3 : `You are a professional commercial mockup generator.
+
+INPUT:
+- A single product image.
+
+TASK:
+Create a clean studio-style product mockup.
+
+INSTRUCTIONS:
+
+1. Detect that the input is an embroidered patch and keep the design unchanged.
+
+2. Place the patch on a clean surface:
+- minimal fabric background (canvas, linen, or neutral textile)
+- or flat lay composition
+
+3. Environment:
+- studio lighting setup
+- soft shadows, evenly lit
+
+4. Style:
+- minimal, modern, premium e-commerce aesthetic
+- neutral tones (white, beige, gray)
+
+5. Realism:
+- sharp details of embroidery texture
+- high clarity, no blur
+- accurate shadow under product
+
+6. Composition:
+- centered or slightly offset composition
+- clean negative space around product
+
+7. Camera:
+- top-down or slight angle (15–30 degrees)
+- high-resolution product photography
+
+OUTPUT:
+Generate 1 clean commercial mockup image.`,
+MockupSuncatcher1 : `Use the uploaded design exactly as provided and create one realistic suncatcher product mockup.
+Place the suncatcher hanging in front of a bright window with soft daylight.
+Show translucent glass/acrylic behavior, clean edge highlights, and natural shadow falloff.
+Keep the printed artwork sharp, centered, and unchanged in color or layout.
+No extra text, no logo, no watermark, no cluttered background.
+Commercial product photography style, high resolution, clean and premium look.`,
+MockupSuncatcher2 : `Create a cozy lifestyle mockup for the uploaded suncatcher design.
+Scene: warm home interior near a window, soft afternoon light, calm decorative context.
+The suncatcher must be the hero object and clearly visible, with realistic hanging string and depth.
+Preserve the design exactly (no distortion, no recolor, no added elements on artwork).
+Use natural shadows and subtle bokeh to keep focus on the product.
+High-detail, photorealistic, e-commerce ready output.`,
+MockupSuncatcher3 : `Generate a clean gift-focused mockup for the uploaded suncatcher design.
+Show the product naturally in a hand-held or tabletop gift scene with neutral premium styling.
+Keep the design fully readable and unchanged, with crisp print detail.
+Lighting should be soft and realistic, with balanced contrast and elegant depth of field.
+No brand names, no watermark, no extra text overlays.
+Final image must look like professional lifestyle product photography.`,
+MockupHolo1 : `Use the uploaded design exactly and create a premium holoarcylic ornament mockup.
+Focus on transparent acrylic material with holographic iridescent reflections.
+Place the ornament on a minimal studio background with soft directional lighting.
+Keep artwork placement, proportions, and colors unchanged.
+Show realistic specular highlights and clean edge definition.
+No watermark, no logo, no extra typography. High-resolution commercial mockup quality.`,
+MockupHolo2 : `Create a realistic lifestyle mockup for the uploaded holoarcylic ornament.
+Scene: ornament hanging near sunlight so holographic reflections cast subtle rainbow tones.
+Product remains centered as the hero, with natural depth and realistic shadowing.
+Preserve design exactly with no edits to the printed artwork.
+Background should be clean and softly blurred, premium home decor vibe.
+Output in sharp, photorealistic, print-accurate quality.`,
+MockupHolo3 : `Generate a festive premium mockup for the uploaded holoarcylic ornament design.
+Place the ornament in an elegant decorative context (clean seasonal setting, soft bokeh lights).
+Maintain exact artwork fidelity, crisp detail, and true colors.
+Acrylic transparency and holographic reflections must look physically realistic.
+No text overlays, no logos, no busy composition.
+Produce a polished e-commerce ready image with high clarity and natural lighting.`,
+redesign: `You are an expert in creative transformation and vector redesign for suncatcher products.
+
+The input is a reference image. Your goal is to create a NEW design inspired by the original concept, but clearly different in composition and structure. `,
+
 }
 
 export const PROMPT_DEFAULTS: Record<string, string> = { ...PROMPTS }

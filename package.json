@@ -1,7 +1,7 @@
 {
   "name": "offorest",
   "private": true,
-  "version": "0.1.16",
+  "version": "0.1.23",
   "type": "module",
   "main": "main.js",
   "description": "Offorest - Ứng dụng quản lý và tạo sticker cho các sản phẩm của Offorest",
@@ -12,6 +12,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "electron": "electron .",
+    "local-worker": "electron . --local-mockup-worker",
     "electron:dev": "cross-env OFFOREST_DEV_SERVER_URL=http://127.0.0.1:5173 wait-on http://127.0.0.1:5173 && electron .",
     "start": "concurrently \"npm run dev\" \"npm run electron:dev\"",
     "dist": "npm run build && electron-builder",
@@ -21,11 +22,19 @@
   },
   "dependencies": {
     "@imgly/background-removal": "^1.7.0",
+    "@napi-rs/canvas": "^0.1.79",
     "@tailwindcss/vite": "^4.2.1",
+    "ag-psd": "^28.5.1",
     "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
     "electron-updater": "^6.8.3",
     "gapi-script": "^1.2.0",
     "lucide-react": "^0.577.0",
+    "mysql2": "^3.24.2",
+    "pixi.js": "^7.4.2",
+    "pngjs": "^7.0.0",
+    "psd": "^3.4.0",
+    "puppeteer-core": "^24.42.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.13.1",
@@ -62,23 +71,39 @@
     "directories": {
       "output": "release"
     },
+    "icon": "public/logo.jpg",
     "files": [
       "app-dist/**/*",
       "main.js",
+      "preload.cjs",
       "preload.js",
       "package.json"
     ],
     "win": {
       "target": "nsis",
+      "icon": "public/logo.jpg",
       "signAndEditExecutable": false
     },
     "nsis": {
       "artifactName": "Offorest-Setup-${version}.${ext}"
     },
     "mac": {
+      "icon": "public/logo.jpg",
       "target": [
-        { "target": "dmg", "arch": ["x64", "arm64"] },
-        { "target": "zip", "arch": ["x64", "arm64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ],
       "category": "public.app-category.productivity"
     }

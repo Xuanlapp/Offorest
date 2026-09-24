@@ -8,21 +8,24 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+.env
 dist
 dist-ssr
-app-dist
-release
 *.local
 release
-releaseonlargeeease/*.exe
+# Electron build outputs (large binaries)
+release/win-unpacked/
+release/*.exe
 release/*.blockmap
 release-rebuild/
 
+# Editor directories and files
 .vscode/*
 !.vscode/extensions.json
 .idea
 .DS_Store
 *.suo
 *.ntvs*
+*.njsproj
 *.sln
 *.sw?

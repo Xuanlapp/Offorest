@@ -4,6 +4,7 @@ import { getDefaultPathForUser, getFirstProductPath, login } from '../services/a
 import { useAuth } from '../contexts/AuthContext'
 
 export default function LoginPage() {
+  const appLogoSrc = `${import.meta.env.BASE_URL}logo.jpg`
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -41,6 +42,13 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen bg-[#0b0d12] flex items-center justify-center">
       <div className="bg-[#1a1d23] p-8 rounded-lg shadow-lg w-full max-w-md">
+        <div className="mb-5 flex justify-center">
+          <img
+            src={appLogoSrc}
+            alt="App logo"
+            className="h-16 w-16 rounded-xl border border-zinc-700 object-cover"
+          />
+        </div>
         <h2 className="text-2xl font-bold text-white text-center mb-6">
           Đăng nhập
         </h2>

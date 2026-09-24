@@ -499,6 +499,7 @@ export const redesignImage = async (imageUrl, prompt) => {
       },
     },
   }
+  console.log('Payload gửi backend redesign:', payload)
   // const headers = getAuthHeaders()
   const data = await callBackend('/vertex/ornament', payload)
 
@@ -636,6 +637,7 @@ export const analyzeStickerImage = async ({ file = null, imageUrl = '', prompt =
     "text": prompt,
   }
 
+  console.log('Payload gửi backend sticker analyze:', payload)
   const data = await callBackend('/vertex/sticker/analyze', payload)
 
   const extracted = extractImageResult(data)
@@ -842,7 +844,14 @@ const extractAnalysesFromResponse = (responseData) => {
   return []
 }
 
-export const generateLifestyleImage = async ({ file = null, imageUrl = '', keyword = '' }) => {
+export const generateLifestyleImage = async ({
+  file = null,
+  imageUrl = '',
+  keyword = '',
+  analysisCount = 3,
+  maxGenerateCount = 3,
+  onImageGenerated = null,
+} = {}) => {
   const { userId } = buildUserPayload()
   const { base64, mimeType } = await sourceImageToBase64({ file, imageUrl })
 
@@ -850,7 +859,7 @@ export const generateLifestyleImage = async ({ file = null, imageUrl = '', keywo
   const analyzePayload = {
     inlineData: { mimeType, data: base64 },
     analysis_prompt: PROMPTS.lifestyleAnalyze,
-    analysis_count: 3,
+    analysis_count: Math.max(1, Math.min(5, Number(analysisCount) || 3)),
   }
 
   logOutgoingPrompt('generateLifestyleImage.analyze', PROMPTS.lifestyleAnalyze)
@@ -863,33 +872,50 @@ export const generateLifestyleImage = async ({ file = null, imageUrl = '', keywo
     throw new Error('Backend không trả về analyses lifestyle hợp lệ.')
   }
 
-  // ── STEP 2: Generate ảnh cho từng analysis song song ──
-  const generateResults = await Promise.all(
-    analyses.map(async (analysisItem) => {
-      const insight = extractInsightFromAnalysis(analysisItem?.analysis || analysisItem)
-      const generatePrompt = buildLifestyleGeneratePrompt(keyword, insight)
+  // ── STEP 2: Generate ảnh lifestyle, ưu tiên đủ số lượng target ──
+  const targetCount = Math.max(1, Number(maxGenerateCount) || 1)
+  const baseAnalyses = analyses.length ? analyses : [{}]
+  const generationQueue = Array.from({ length: targetCount }).map((_, index) => {
+    return baseAnalyses[index % baseAnalyses.length]
+  })
 
-      logOutgoingPrompt('generateLifestyleImage.generate', generatePrompt)
+  const generateResults = []
 
+  for (let index = 0; index < generationQueue.length; index += 1) {
+    const analysisItem = generationQueue[index]
+    const insight = extractInsightFromAnalysis(analysisItem?.analysis || analysisItem)
+    const generatePrompt = buildLifestyleGeneratePrompt(keyword, insight)
 
-      const genPayload = {
-        user_id: userId,
-        inlineData: { mimeType, data: base64 },
-        mockup_prompt: generatePrompt,
-      }
+    logOutgoingPrompt('generateLifestyleImage.generate', generatePrompt)
 
-      const genData = await callBackend('/vertex/lifestyle/generate', genPayload)
-      const extracted = extractLifestyleResult(genData)
+    const genPayload = {
+      user_id: userId,
+      inlineData: { mimeType, data: base64 },
+      mockup_prompt: generatePrompt,
+    }
 
-      return {
-        base64: extracted?.base64 || null,
-        mimeType: extracted?.mimeType || 'image/png',
-        insight,
-        generatePrompt,
-        raw: genData,
-      }
-    })
-  )
+    const genData = await callBackend('/vertex/lifestyle/generate', genPayload)
+    const extracted = extractLifestyleResult(genData)
+
+    const nextResult = {
+      base64: extracted?.base64 || null,
+      mimeType: extracted?.mimeType || 'image/png',
+      insight,
+      generatePrompt,
+      raw: genData,
+    }
+
+    generateResults.push(nextResult)
+
+    if (typeof onImageGenerated === 'function' && nextResult.base64) {
+      onImageGenerated({
+        image: nextResult,
+        imageIndex: index,
+        images: generateResults.filter((item) => item?.base64),
+        total: generationQueue.length,
+      })
+    }
+  }
 
   const images = generateResults.filter((r) => r.base64)
 
@@ -897,9 +923,267 @@ export const generateLifestyleImage = async ({ file = null, imageUrl = '', keywo
     base64: images[0]?.base64 || null,
     mimeType: images[0]?.mimeType || 'image/png',
     images,
-    analyses,
+    analyses: generationQueue,
     raw: { analyzeData, generateResults },
   }
+}
+
+export const generateMockupImage = async ({
+  file = null,
+  imageUrl = '',
+  prompt = '',
+} = {}) => {
+  if (!prompt || !prompt.trim()) {
+    throw new Error('Missing mockup prompt')
+  }
+
+  const { userId } = buildUserPayload()
+  const { base64, mimeType } = await sourceImageToBase64({ file, imageUrl })
+
+  logOutgoingPrompt('generateMockupImage', prompt)
+
+  const payload = {
+    user_id: userId,
+    inlineData: { mimeType, data: base64 },
+    mockup_prompt: prompt,
+  }
+
+  const result = await callBackend('/vertex/mockup', payload)
+  const extracted = extractLifestyleResult(result)
+
+  if (!extracted?.base64) {
+    console.error('❌ [geminiService] Invalid mockup response:', result)
+    throw new Error('Backend không trả về ảnh mockup hợp lệ.')
+  }
+
+  return {
+    base64: extracted.base64,
+    mimeType: extracted.mimeType || 'image/png',
+    images: extracted.images || [],
+    mockup: result?.mockup && typeof result.mockup === 'object' ? result.mockup : null,
+    raw: result,
+  }
+}
+
+const normalizeTags = (tags) => {
+  if (Array.isArray(tags)) {
+    return tags.map((tag) => String(tag || '').trim()).filter(Boolean)
+  }
+
+  if (typeof tags === 'string') {
+    return tags
+      .split(',')
+      .map((tag) => String(tag || '').trim())
+      .filter(Boolean)
+  }
+
+  return []
+}
+
+const buildEtsyListingPrompt = ({ prompt, keyword, productType }) => {
+  const basePrompt = String(prompt || PROMPTS.EtsyTitle || PROMPTS.title || '').trim()
+  const safeKeyword = String(keyword || '').trim() || 'Personalized Pet Ornament Using Pet\'s Photo + Name'
+  const safeProductType = String(productType || '').trim() || 'Ceramic Ornament'
+
+  const inputBlock = [
+    '======================================== INPUT ========================================',
+    `Keyword chính: "${safeKeyword}"`,
+    `Sản phẩm: "${safeProductType}"`,
+    'Ảnh sản phẩm: Hãy phân tích trực tiếp từ ảnh được cung cấp.',
+  ].join('\n')
+
+  return `${inputBlock}\n${basePrompt}`.trim()
+}
+
+const buildAmazonListingPrompt = ({ prompt, keyword }) => {
+  const basePrompt = String(prompt || PROMPTS.AmazonTitle || '').trim()
+  const safeKeyword = String(keyword || '').trim() || 'Personalized pet ornament'
+
+  const inputBlock = [
+    '======================================== INPUT ========================================',
+    `Keyword chính: "${safeKeyword}"`,
+    'Ảnh sản phẩm: Hãy phân tích trực tiếp từ ảnh được cung cấp.',
+  ].join('\n')
+
+  return `${inputBlock}\n${basePrompt}`.trim()
+}
+
+const pickFirstValue = (source, keys = []) => {
+  for (const key of keys) {
+    const value = source?.[key]
+    if (value !== undefined && value !== null && String(value).trim()) {
+      return String(value).trim()
+    }
+  }
+
+  return ''
+}
+
+const pickFirstObject = (sources = []) => {
+  for (const source of sources) {
+    if (source && typeof source === 'object' && !Array.isArray(source)) {
+      return source
+    }
+  }
+  return {}
+}
+
+export const generateMarketplaceListingFromRedesign = async ({
+  marketplace = 'etsy',
+  base64,
+  mimeType = 'image/png',
+  prompt = '',
+  keyword = '',
+  productType = '',
+}) => {
+  if (!base64) {
+    throw new Error('Thiếu ảnh redesign để tạo metadata marketplace.')
+  }
+
+  const normalizedMarketplace = String(marketplace || '').trim().toLowerCase()
+  const isAmazonMarketplace = normalizedMarketplace === 'amazon'
+  const endpoint = isAmazonMarketplace ? '/vertex/amazon/title' : '/vertex/etsy/title'
+  const finalPrompt = isAmazonMarketplace
+    ? buildAmazonListingPrompt({ prompt, keyword })
+    : buildEtsyListingPrompt({ prompt, keyword, productType })
+
+  if (!finalPrompt) {
+    throw new Error('Thiếu prompt tạo listing marketplace.')
+  }
+
+  logOutgoingPrompt(`generateMarketplaceListingFromRedesign.${normalizedMarketplace || 'etsy'}`, finalPrompt)
+
+  const payload = {
+    inlineData: {
+      mimeType: mimeType || 'image/png',
+      data: base64,
+    },
+    keyword: String(keyword || '').trim(),
+    product_type: String(productType || '').trim(),
+    productType: String(productType || '').trim(),
+    text: finalPrompt,
+  }
+
+  const data = await callBackend(endpoint, payload)
+  const result = pickFirstObject([
+    data?.data?.data,
+    data?.data,
+    data?.result,
+    data,
+  ])
+
+  if (isAmazonMarketplace) {
+    const bulletCandidates = [
+      result?.bullet_points,
+      result?.bulletPoints,
+      result?.bullets,
+      result?.highlights,
+    ]
+    const bulletArray = bulletCandidates.find((item) => Array.isArray(item) && item.length) || []
+
+    const title = pickFirstValue(result, ['title', 'TITLE'])
+    const productDescription = pickFirstValue(result, [
+      'product_description',
+      'productDescription',
+      'PRODUCT_DESCRIPTION',
+      'PRODUCT DESCRIPTION',
+      'description',
+      'DESCRIPTION',
+    ])
+    const bulletPoint1 = pickFirstValue(result, ['bullet_point_1', 'BULLET POINT 1', 'bulletPoint1']) || String(bulletArray[0] || '').trim()
+    const bulletPoint2 = pickFirstValue(result, ['bullet_point_2', 'BULLET POINT 2', 'bulletPoint2']) || String(bulletArray[1] || '').trim()
+    const bulletPoint3 = pickFirstValue(result, ['bullet_point_3', 'BULLET POINT 3', 'bulletPoint3']) || String(bulletArray[2] || '').trim()
+    const bulletPoint4 = pickFirstValue(result, ['bullet_point_4', 'BULLET POINT 4', 'bulletPoint4']) || String(bulletArray[3] || '').trim()
+    const bulletPoint5 = pickFirstValue(result, ['bullet_point_5', 'BULLET POINT 5', 'bulletPoint5']) || String(bulletArray[4] || '').trim()
+    const genericKeyword = pickFirstValue(result, [
+      'getneric_keyword',
+      'GETNERIC KEYWORD',
+      'generic_keyword',
+      'GENERIC KEYWORD',
+      'genericKeyword',
+      'search_terms',
+      'searchTerms',
+    ])
+
+    if (!title) {
+      console.error('❌ [geminiService] Invalid /vertex/amazon/title response:', data)
+      throw new Error('Backend /vertex/amazon/title không trả về TITLE hợp lệ.')
+    }
+
+    if (!productDescription || !bulletPoint1 || !genericKeyword) {
+      console.warn('⚠️ [geminiService] Amazon response is partial, continue with fallback values.', {
+        hasProductDescription: !!productDescription,
+        hasBulletPoint1: !!bulletPoint1,
+        hasGenericKeyword: !!genericKeyword,
+      })
+    }
+
+    return {
+      marketplace: 'amazon',
+      success: !!result?.success,
+      provider: result?.provider || '',
+      model: result?.model || '',
+      title,
+      productDescription,
+      bulletPoint1,
+      bulletPoint2,
+      bulletPoint3,
+      bulletPoint4,
+      bulletPoint5,
+      genericKeyword,
+    }
+  }
+
+  const etsyResult = pickFirstObject([
+    result?.etsy,
+    result?.listing,
+    result?.metadata,
+    result,
+  ])
+
+  const title = pickFirstValue(etsyResult, ['title', 'TITLE'])
+  const description = pickFirstValue(etsyResult, ['description', 'DESCRIPTION', 'Description'])
+  const normalizedTags = normalizeTags(
+    etsyResult?.tags
+    || etsyResult?.normalized_tags
+    || etsyResult?.tag
+    || etsyResult?.Tag
+  )
+
+  if (!title || !description || !normalizedTags.length) {
+    console.error('❌ [geminiService] Invalid /vertex/etsy/title response:', data)
+    throw new Error('Backend /vertex/etsy/title không trả về đầy đủ title, description, tags.')
+  }
+
+  return {
+    marketplace: 'etsy',
+    success: !!(etsyResult?.success ?? result?.success),
+    provider: etsyResult?.provider || result?.provider || '',
+    model: etsyResult?.model || result?.model || '',
+    title,
+    description,
+    tags: normalizedTags,
+    tagsText: normalizedTags.join(', '),
+    title_character_count: Number(etsyResult?.title_character_count || title.length),
+    description_character_count: Number(etsyResult?.description_character_count || description.length),
+  }
+}
+
+export const generateEtsyListingFromRedesign = async ({
+  base64,
+  mimeType = 'image/png',
+  prompt = PROMPTS.title,
+  keyword = '',
+  productType = '',
+}) => {
+  return generateMarketplaceListingFromRedesign({
+    marketplace: 'etsy',
+    base64,
+    mimeType,
+    prompt,
+    keyword,
+    productType,
+  })
 }
 
 // ==================== BATCH IMAGE REDESIGN ====================
@@ -920,11 +1204,13 @@ export const dataUrlToParts = (dataUrl) => ({
 export default {
   analyzeComboImage,
   generateComboStickerImage,
+  generateMarketplaceListingFromRedesign,
+  generateEtsyListingFromRedesign,
   generateLifestyleImage,
+  generateMockupImage,
   redesignImage,
   redesignImageBatch,
   customEditImageFromDataUrl,
   sourceImageToBase64,
   dataUrlToParts,
 }
-

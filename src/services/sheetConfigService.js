@@ -19,7 +19,7 @@ const CACHE_DURATION = 5 * 60 * 1000; // 5 phút
  * | Page | SheetURL |
  * |-------|----------|
  * | holoarcylic | https://docs.google.com/spreadsheets/d/... |
- * | suncatcher | https://docs.google.com/spreadsheets/d/... |
+ * | ornament | https://docs.google.com/spreadsheets/d/... |
  */
 export async function getSheetConfig() {
   const now = Date.now();
@@ -80,7 +80,7 @@ export async function getSheetUrlForPage(pageName) {
   const config = await getSheetConfig();
   const normalizedPage = pageName.toLowerCase().trim();
 
-  const sheetUrl = config[normalizedPage] || (normalizedPage === 'suncatcher' ? config.ornament : null);
+  const sheetUrl = config[normalizedPage];
   if (!sheetUrl) {
     throw new Error(`Không tìm thấy config cho page: ${pageName}`);
   }

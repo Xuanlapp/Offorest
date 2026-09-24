@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { uploadFilesToBackend, testBackendConnection } from '../services/googleDriveService'
+import { uploadFilesToBackend } from '../services/googleDriveService'
 import { removeBackgroundSmart, REMOVAL_MODES } from '../services/backgroundRemovalService'
 import {
   CloudUpload,
@@ -21,7 +21,9 @@ import {
   removePromptFromPromptsMoi,
   savePromptToPromptsMoi,
 } from '../prompt/PromptsMoiService'
-import PromptEditorModal from '../components/PromptEditorModal'
+import PromptEditorModal from '../modals/PromptEditorModal'
+import ListedItemsModal from '../modals/ListedItemsModal'
+import { getSheetUrlForPage } from '../services/sheetConfigService'
 
 // ==================== CANVAS UTILS ====================
 
@@ -347,8 +349,6 @@ export default function ComboStickerPage() {
     return data ? JSON.parse(data) : null;
   });
   const [uploading, setUploading] = useState(false);
-  const [uploadResult, setUploadResult] = useState(null);
-  const [testingConnection, setTestingConnection] = useState(false);
 
   // Listen for changes from navbar
   useEffect(() => {
@@ -402,7 +402,6 @@ export default function ComboStickerPage() {
     const sheetId = globalSheetData.sheetId;
 
     setUploading(true);
-    setUploadResult(null);
     try {
       // Chuẩn bị files: ảnh gốc + generated
       const files = [];
@@ -445,30 +444,12 @@ export default function ComboStickerPage() {
         files: files.map((file) => ({ name: file.name, size: file.size, type: file.type })),
       });
 
-      const result = await uploadFilesToBackend(files, ws.keyword, sheetId, globalAccessToken, globalSheetData.gid, null, 'combosticker');
-      setUploadResult(result);
+      await uploadFilesToBackend(files, ws.keyword, sheetId, globalAccessToken, globalSheetData.gid, null, 'combosticker');
       alert('Upload thành công!');
     } catch (err) {
       alert('Upload lỗi: ' + err.message);
     } finally {
       setUploading(false);
-    }
-  };
-
-  // Test connection đến backend
-  const handleTestConnection = async () => {
-    setTestingConnection(true);
-    try {
-      const isConnected = await testBackendConnection();
-      if (isConnected) {
-        alert('✅ Kết nối backend thành công!');
-      } else {
-        alert('❌ Không thể kết nối đến backend. Kiểm tra network và endpoint.');
-      }
-    } catch (error) {
-      alert('❌ Lỗi khi test connection: ' + error.message);
-    } finally {
-      setTestingConnection(false);
     }
   };
   // Workspace state: array of workspace objects
@@ -492,6 +473,7 @@ export default function ComboStickerPage() {
   ])
   const [activeIdx, setActiveIdx] = useState(0)
   const fileInputRefs = useRef([])
+  const [isListedItemsModalOpen, setIsListedItemsModalOpen] = useState(false)
 
   const revokeGeneratedItem = (item) => {
     if (item?.previewUrl?.startsWith('blob:')) {
@@ -678,7 +660,8 @@ export default function ComboStickerPage() {
       const normalized = { ...analysis, objects }
       updateWorkspace(idx, { analysisResult: normalized, runProgress: 20 })
 
-      const results = []
+      const processedResults = Array(objects.length).fill(null)
+      const processingTasks = []
       for (let i = 0; i < objects.length; i += 1) {
         const objectName = objects[i]
         updateWorkspace(idx, { runMessage: `Generating ${i + 1}/${objects.length}: ${objectName}` })
@@ -694,23 +677,29 @@ export default function ComboStickerPage() {
             prompt: comboGeneratePrompt,
           })
 
-          const processed = await processItem({
+          updateWorkspace(idx, { runProgress: 20 + Math.round(((i + 1) / objects.length) * 80) })
+
+          const processingTask = processItem({
             id: `${objectName}-${i + 1}`,
             objectName,
             base64: image.base64,
             mimeType: image.mimeType,
+          }).then((processed) => {
+            processedResults[i] = processed
+            updateWorkspace(idx, { generatedResults: processedResults.filter(Boolean) })
+            return processed
           })
 
-          results.push(processed)
-          updateWorkspace(idx, { generatedResults: [...results] })
-          updateWorkspace(idx, { runProgress: 20 + Math.round(((i + 1) / objects.length) * 80) })
+          processingTasks.push(processingTask)
         } catch (err) {
           console.error(`Error generating image for object '${objectName}' (index ${i}):`, err)
         }
-        await sleep(250)
       }
 
-      updateWorkspace(idx, { runMessage: `Completed ${results.length} sticker outputs` })
+      await Promise.allSettled(processingTasks)
+
+      const completedCount = processedResults.filter(Boolean).length
+      updateWorkspace(idx, { runMessage: `Completed ${completedCount} sticker outputs` })
     } catch (err) {
       updateWorkspace(idx, { runMessage: err.message || 'Analysis failed' })
     } finally {
@@ -983,6 +972,12 @@ export default function ComboStickerPage() {
                 </div>
                 <div className="flex items-center gap-3">
                   <button
+                    onClick={() => setIsListedItemsModalOpen(true)}
+                    className="rounded-full border border-zinc-300 bg-white px-4 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50"
+                  >
+                    Listed
+                  </button>
+                  <button
                     type="button"
                     className="inline-flex items-center gap-2 rounded-full border border-indigo-300 bg-white px-4 py-2 text-xs font-semibold text-indigo-600 transition hover:bg-indigo-50"
                     onClick={() => setShowPromptEditor(true)}
@@ -1231,6 +1226,11 @@ export default function ComboStickerPage() {
           </section>
         )
       ))}
+      <ListedItemsModal
+        isOpen={isListedItemsModalOpen}
+        onClose={() => setIsListedItemsModalOpen(false)}
+        sheetUrl={localStorage.getItem('comboStickerSheetUrl') || ''}
+      />
     </>
   )
 }
