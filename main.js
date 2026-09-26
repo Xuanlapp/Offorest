@@ -952,6 +952,24 @@ function isDesignTargetLayer(layer) {
   return normalizedName === 'design' || normalizedName === 'desgin';
 }
 
+function findTemplateLayerOutsideMockupGroups(psd) {
+  let templateLayer = null;
+  const visit = (layers, insideMockupGroup = false) => {
+    for (const layer of layers || []) {
+      const isMockup = isMockupGroup(layer);
+      const nextInsideMockup = insideMockupGroup || isMockup;
+      if (!nextInsideMockup && String(layer?.name || '').trim().toLowerCase() === 'template') {
+        templateLayer = layer;
+        return true;
+      }
+      if (Array.isArray(layer?.children) && visit(layer.children, nextInsideMockup)) return true;
+    }
+    return false;
+  };
+  visit(psd?.children || []);
+  return templateLayer;
+}
+
 async function replaceDesignLayers(psd, designDataUrl) {
   const designLayers = [];
   walkLayers(psd?.children || [], (layer) => {
@@ -965,18 +983,25 @@ async function replaceDesignLayers(psd, designDataUrl) {
   }
 
   const image = await loadImage(designDataUrl);
+  const templateLayer = findTemplateLayerOutsideMockupGroups(psd);
+  const templateBounds = templateLayer ? getLayerBounds(templateLayer) : null;
 
   for (const designLayer of designLayers) {
-    const placedWidth = toPositiveInt(designLayer?.placedLayer?.width, 0);
-    const placedHeight = toPositiveInt(designLayer?.placedLayer?.height, 0);
     const bounds = getLayerBounds(designLayer);
-    const targetWidth = placedWidth || toPositiveInt(bounds.width, 1);
-    const targetHeight = placedHeight || toPositiveInt(bounds.height, 1);
+    const targetBounds = templateBounds || bounds;
+    const targetWidth = toPositiveInt(targetBounds.width, 1);
+    const targetHeight = toPositiveInt(targetBounds.height, 1);
     const layerCanvas = createCanvas(targetWidth, targetHeight);
     const ctx = layerCanvas.getContext('2d');
     ctx.clearRect(0, 0, targetWidth, targetHeight);
     ctx.drawImage(image, 0, 0, targetWidth, targetHeight);
     designLayer.canvas = layerCanvas;
+    if (templateBounds) {
+      designLayer.left = templateBounds.left;
+      designLayer.top = templateBounds.top;
+      designLayer.right = templateBounds.right;
+      designLayer.bottom = templateBounds.bottom;
+    }
     designLayer[OFFOREST_REPLACED_DESIGN_LAYER] = true;
   }
 
