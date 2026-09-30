@@ -54,6 +54,7 @@ let geminiLastOutputHash = '';
 let localMockupWorkerTimer = null;
 let localMockupWorkerActiveCount = 0;
 let localMockupWorkerLastResult = null;
+let localPhotoshopRenderQueue = Promise.resolve();
 
 function getLocalMockupWorkerConfigPath() {
   return path.join(app.getPath('userData'), LOCAL_MOCKUP_WORKER_CONFIG_FILE);
@@ -99,6 +100,14 @@ async function ensureBackgroundLocalMockupWorker() {
     detached: true,
     stdio: 'ignore',
     windowsHide: true,
+  });
+  child.once('error', (error) => {
+    localMockupWorkerLastResult = {
+      status: 'error',
+      error: `Không thể khởi động worker: ${error?.code || error?.message || 'unknown error'}`,
+      at: new Date().toISOString(),
+    };
+    console.error('[LocalMockupWorker] Failed to spawn background worker:', error);
   });
   child.unref();
   return { running: false, starting: true, activeWorkers: 0, lastResult: null };
@@ -403,6 +412,7 @@ async function processLocalMockupJob(config, job) {
   const rendered = await renderLocalMockupWithFallbacks({
     psdPath,
     designDataUrl: await getMasterImageDataUrl(config, masterSource),
+    productSlug,
   });
   const outputUrls = [];
   for (let index = 0; index < Math.min(rendered.outputs.length, 11); index += 1) {
@@ -1255,7 +1265,13 @@ function drawPsdToCanvas(psd, layersToDraw = null) {
     const bounds = getLayerBounds(layer);
     const layerCanvas = createCanvas(width, height);
     const layerContext = layerCanvas.getContext('2d');
-    const placedQuad = getPlacedLayerQuad(layer, srcCanvas);
+    // A replaced Design layer already has its canvas and document bounds
+    // normalized to the Template layer. Do not reuse the original smart-object
+    // quad here, because it would overwrite the new bounds and make ag-psd
+    // differ from Photoshop's Edit Contents + resize/translate result.
+    const placedQuad = layer?.[OFFOREST_REPLACED_DESIGN_LAYER]
+      ? null
+      : getPlacedLayerQuad(layer, srcCanvas);
     layerContext.save();
     layerContext.globalAlpha = Math.max(0, Math.min(1, inheritedOpacity));
     if (placedQuad) {
@@ -2210,6 +2226,38 @@ function buildPhotoshopRenderJsx({ psdPath, designImagePath, outputDir }) {
     '}',
     '',
     'function getBoundsInPixels(layer) {',
+    '  if (layer.kind === LayerKind.SMARTOBJECT) {',
+    '    try {',
+    '      app.activeDocument.activeLayer = layer;',
+    '      var reference = new ActionReference();',
+    '      reference.putEnumerated(charIDToTypeID("Lyr "), charIDToTypeID("Ordn"), charIDToTypeID("Trgt"));',
+    '      var descriptor = executeActionGet(reference);',
+    '      var smartObjectMoreKey = stringIDToTypeID("smartObjectMore");',
+    '      var transformKey = stringIDToTypeID("transform");',
+    '      if (descriptor.hasKey(smartObjectMoreKey)) {',
+    '        var smartObjectMore = descriptor.getObjectValue(smartObjectMoreKey);',
+    '        if (smartObjectMore.hasKey(transformKey)) {',
+    '          var transform = smartObjectMore.getList(transformKey);',
+    '          if (transform.count >= 8) {',
+    '            var values = [];',
+    '            for (var transformIndex = 0; transformIndex < 8; transformIndex++) {',
+    '              var valueType = transform.getType(transformIndex);',
+    '              values.push(valueType === DescValueType.UNITDOUBLE',
+    '                ? transform.getUnitDoubleValue(transformIndex)',
+    '                : transform.getDouble(transformIndex));',
+    '            }',
+    '            var minX = Math.min(values[0], values[2], values[4], values[6]);',
+    '            var maxX = Math.max(values[0], values[2], values[4], values[6]);',
+    '            var minY = Math.min(values[1], values[3], values[5], values[7]);',
+    '            var maxY = Math.max(values[1], values[3], values[5], values[7]);',
+    '            if (maxX > minX && maxY > minY) {',
+    '              return { left: minX, top: minY, width: maxX - minX, height: maxY - minY };',
+    '            }',
+    '          }',
+    '        }',
+    '      }',
+    '    } catch (transformError) {}',
+    '  }',
     '  var bounds = layer.bounds;',
     '  var left = bounds[0].as("px");',
     '  var top = bounds[1].as("px");',
@@ -2229,16 +2277,20 @@ function buildPhotoshopRenderJsx({ psdPath, designImagePath, outputDir }) {
     '  layer.translate(targetBounds.left - sourceBounds.left, targetBounds.top - sourceBounds.top);',
     '}',
     '',
+    'function placeEmbeddedFile(imagePath) {',
+    '  var descriptor = new ActionDescriptor();',
+    '  descriptor.putPath(charIDToTypeID("null"), new File(imagePath));',
+    '  descriptor.putEnumerated(charIDToTypeID("FTcs"), charIDToTypeID("QCSt"), charIDToTypeID("Qcsa"));',
+    '  executeAction(charIDToTypeID("Plc "), descriptor, DialogModes.NO);',
+    '  return app.activeDocument.activeLayer;',
+    '}',
+    '',
     'function replaceSmartObjectContent(layer, imagePath) {',
     '  app.activeDocument.activeLayer = layer;',
     "  if (layer.kind !== LayerKind.SMARTOBJECT) return;",
     '  executeAction(stringIDToTypeID("placedLayerEditContents"), undefined, DialogModes.NO);',
     '  var soDoc = app.activeDocument;',
-    '  var img = new File(imagePath);',
-    '  var opened = app.open(img);',
-    '  opened.activeLayer.duplicate(soDoc);',
-    '  opened.close(SaveOptions.DONOTSAVECHANGES);',
-    '  var newLayer = soDoc.activeLayer;',
+    '  var newLayer = placeEmbeddedFile(imagePath);',
     '  var templateLayer = findLayerByName(soDoc, "Template");',
     '  var targetBounds = templateLayer ? getBoundsInPixels(templateLayer) : null;',
     '  if (targetBounds) {',
@@ -2426,7 +2478,22 @@ async function renderMockupsWithPhotoshopEngine({ psdPath, designDataUrl }) {
   };
 }
 
-async function renderLocalMockupWithFallbacks({ psdPath, designDataUrl }) {
+function enqueuePhotoshopRender(renderOptions) {
+  const renderTask = localPhotoshopRenderQueue.then(() => renderMockupsWithPhotoshopEngine(renderOptions));
+  localPhotoshopRenderQueue = renderTask.catch(() => undefined);
+  return renderTask;
+}
+
+async function renderLocalMockupWithFallbacks({ psdPath, designDataUrl, productSlug = '' }) {
+  const normalizedProductSlug = String(productSlug || '').trim().toLowerCase();
+  if (normalizedProductSlug === 'glass') {
+    const photoshopResult = await enqueuePhotoshopRender({ psdPath, designDataUrl });
+    return {
+      ...photoshopResult,
+      warning: 'Sản phẩm glass được render trực tiếp bằng Photoshop để giữ chất lượng PSD chính xác nhất.',
+    };
+  }
+
   let primaryError;
   try {
     return await renderMockupsFromPsd({ psdPath, designDataUrl });
@@ -2443,7 +2510,7 @@ async function renderLocalMockupWithFallbacks({ psdPath, designDataUrl }) {
   }
 
   try {
-    const photoshopResult = await renderMockupsWithPhotoshopEngine({ psdPath, designDataUrl });
+    const photoshopResult = await enqueuePhotoshopRender({ psdPath, designDataUrl });
     return {
       ...photoshopResult,
       warning: `Đã fallback sang Photoshop sau lỗi ag-psd: ${primaryError?.message || 'Invalid SVG image'}`,
