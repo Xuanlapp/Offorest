@@ -51,7 +51,7 @@ export const startLocalMockupWorker = async () => getLocalWorkerBridge().startLo
 
 export const stopLocalMockupWorker = async () => getLocalWorkerBridge().stopLocalWorker()
 
-export const getLocalMockupWorkerStatus = async () => getLocalWorkerBridge().getLocalWorkerStatus()
+export const getLocalMockupWorkerStatus = async (query) => getLocalWorkerBridge().getLocalWorkerStatus(query)
 
 export const getDefaultMockupPsdFile = async () => {
   if (!window?.offorestMockup?.getDefaultPsdFile) {

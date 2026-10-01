@@ -10,6 +10,7 @@ import {
     pickMockupPsdFile,
     renderMockupsFromPsdProgressive,
     saveLocalMockupWorkerConfig,
+    startLocalMockupWorker,
 } from '../services/mockupService'
 import ListedItemsModal from '../modals/ListedItemsModal'
 
@@ -59,6 +60,9 @@ export default function MockupPage() {
     const [expandedLocalJobId, setExpandedLocalJobId] = useState(null)
     const [localJobImageUrls, setLocalJobImageUrls] = useState({})
     const [searchTerm, setSearchTerm] = useState('')
+    const [localJobStatusFilter, setLocalJobStatusFilter] = useState('all')
+    const [localJobPage, setLocalJobPage] = useState(1)
+    const [localJobSearch, setLocalJobSearch] = useState('')
     const mockupImagesRef = useRef({})
 
     useEffect(() => {
@@ -76,7 +80,7 @@ export default function MockupPage() {
             try {
                 const [config, status] = await Promise.all([
                     getLocalMockupWorkerConfig(),
-                    getLocalMockupWorkerStatus(),
+                    getLocalMockupWorkerStatus({ status: localJobStatusFilter, search: localJobSearch, page: localJobPage }),
                 ])
                 setLocalWorkerConfig(config)
                 setLocalWorkerStatus(status)
@@ -93,7 +97,7 @@ export default function MockupPage() {
 
         const refreshStatus = async () => {
             try {
-                setLocalWorkerStatus(await getLocalMockupWorkerStatus())
+                setLocalWorkerStatus(await getLocalMockupWorkerStatus({ status: localJobStatusFilter, search: localJobSearch, page: localJobPage }))
             } catch {
                 // Keep the last known status when the local database is temporarily unavailable.
             }
@@ -102,7 +106,7 @@ export default function MockupPage() {
         refreshStatus()
         const intervalId = window.setInterval(refreshStatus, 3000)
         return () => window.clearInterval(intervalId)
-    }, [])
+    }, [localJobStatusFilter, localJobSearch, localJobPage])
 
     const updateLocalWorkerConfig = (field, value) => {
         setLocalWorkerConfig((previous) => ({ ...previous, [field]: value }))
@@ -139,6 +143,8 @@ export default function MockupPage() {
             const outputUrls = typeof job?.output_urls === 'string'
                     ? JSON.parse(job.output_urls)
                     : job?.output_urls
+            const localUrls = Array.isArray(job?.local_output_urls) ? job.local_output_urls.filter(Boolean) : []
+            if (localUrls.length) return localUrls
             return Array.isArray(outputUrls) ? outputUrls.filter((url) => String(url).startsWith('data:image/')) : []
         } catch {
             return []
@@ -159,7 +165,7 @@ export default function MockupPage() {
     useEffect(() => {
         let isActive = true
         const loadCompletedJobImages = async () => {
-            const completedJobs = (localWorkerStatus?.jobs || []).filter((job) => job.status === 'completed')
+            const completedJobs = (localWorkerStatus?.jobs || []).filter((job) => job.status === 'completed' && job.id === expandedLocalJobId)
             const missingJobs = completedJobs.filter((job) => !Object.hasOwn(localJobImageUrls, job.id))
 
             for (const job of missingJobs) {
@@ -190,8 +196,22 @@ export default function MockupPage() {
 
         loadCompletedJobImages()
         return () => { isActive = false }
-    }, [localWorkerStatus, localJobImageUrls])
+    }, [localWorkerStatus, localJobImageUrls, expandedLocalJobId])
 
+    const handleLocalWorkerRestart = async () => {
+        setIsLocalWorkerSaving(true)
+        setLocalWorkerMessage("Đang khởi động lại worker...")
+        try {
+            await startLocalMockupWorker()
+            await new Promise((resolve) => window.setTimeout(resolve, 1200))
+            setLocalWorkerStatus(await getLocalMockupWorkerStatus({ status: localJobStatusFilter, search: localJobSearch, page: localJobPage }))
+            setLocalWorkerMessage("Đã gửi lệnh khởi động worker. Trạng thái sẽ tự cập nhật.")
+        } catch (workerError) {
+            setLocalWorkerMessage(workerError.message || "Không thể khởi động lại worker.")
+        } finally {
+            setIsLocalWorkerSaving(false)
+        }
+    }
     const handleLocalWorkerToggle = async () => {
         if (!localWorkerConfig) return
         setIsLocalWorkerSaving(true)
@@ -241,6 +261,10 @@ export default function MockupPage() {
             // Ignore storage write failures.
         }
     }, [customMockups])
+
+    const paginatedLocalJobs = localWorkerStatus?.jobs || []
+    const localJobPageSize = localWorkerStatus?.jobPageSize || 20
+    const localJobTotalPages = Math.max(1, Math.ceil((localWorkerStatus?.jobTotal || 0) / localJobPageSize))
 
     const filteredData = data.filter(item => {
         const term = searchTerm.toLowerCase()
@@ -922,16 +946,26 @@ export default function MockupPage() {
                         {isLocalWorkerSettingsOpen ? 'Đóng cài đặt worker' : 'Cài đặt worker'}
                         {localWorkerStatus?.running ? ' (đang chạy)' : ''}
                     </button>
+                    <div className={`mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border px-3 py-2 text-xs ${localWorkerStatus?.running ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-rose-200 bg-rose-50 text-rose-800'}`}>
+                        <div className="flex items-center gap-2">
+                            <span className={`h-2.5 w-2.5 rounded-full ${localWorkerStatus?.running ? 'bg-emerald-500' : 'bg-rose-500'}`} aria-hidden="true" />
+                            <span className="font-semibold">Worker {localWorkerStatus?.running ? 'đang hoạt động' : 'đã dừng'}</span>
+                            <span>{localWorkerStatus?.running ? `${localWorkerStatus.activeWorkers || 0} job đang chạy` : 'Không nhận job mới'}</span>
+                        </div>
+                        <button type="button" onClick={handleLocalWorkerRestart} disabled={isLocalWorkerSaving || localWorkerStatus?.running} className="rounded-lg border border-current px-3 py-1.5 font-semibold hover:bg-white disabled:cursor-not-allowed disabled:opacity-50">
+                            {localWorkerStatus?.running ? 'Worker đang chạy' : 'Khởi động lại worker'}
+                        </button>
+                    </div>
+                    <label className="mt-3 block text-xs text-zinc-700">Tìm job theo STT, ID hoặc sản phẩm
+                        <input value={localJobSearch} onChange={(event) => { setLocalJobSearch(event.target.value); setLocalJobPage(1) }} placeholder="Tìm trong tất cả job..." className="mt-1 block w-full max-w-sm rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm" />
+                    </label>
                     <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                        <span className="rounded-full bg-amber-100 px-2 py-1 text-amber-800">Chờ: {localWorkerStatus?.summary?.waiting || 0}</span>
-                        <span className="rounded-full bg-sky-100 px-2 py-1 text-sky-800">Đang làm: {localWorkerStatus?.summary?.processing || 0}</span>
-                        <span className="rounded-full bg-emerald-100 px-2 py-1 text-emerald-800">Đã xong: {localWorkerStatus?.summary?.completed || 0}</span>
-                        <span className="rounded-full bg-rose-100 px-2 py-1 text-rose-800">Lỗi: {localWorkerStatus?.summary?.failed || 0}</span>
+                        {["all","waiting","processing","completed","failed"].map((status) => <button key={status} type="button" onClick={() => { setLocalJobStatusFilter(status); setLocalJobPage(1) }} className={`rounded-full bg-zinc-100 px-2 py-1 text-zinc-800 ${localJobStatusFilter === status ? "ring-2 ring-indigo-400" : ""}`}>{status === "all" ? "Tất cả" : status === "waiting" ? "Chờ" : status === "processing" ? "Đang làm" : status === "completed" ? "Đã xong" : "Lỗi"}: {status === "all" ? Object.values(localWorkerStatus?.summary || {}).reduce((sum,value) => sum + Number(value || 0), 0) : localWorkerStatus?.summary?.[status] || 0}</button>)}
                     </div>
                     {localWorkerStatus?.error ? <p className="mt-2 text-xs text-rose-700">Không thể đọc queue: {localWorkerStatus.error}</p> : null}
-                    {localWorkerStatus?.jobs?.length ? (
+                    {paginatedLocalJobs.length ? (
                         <div className="mt-2 overflow-hidden rounded-lg border border-zinc-200 bg-white text-xs">
-                            {localWorkerStatus.jobs.map((job) => {
+                            {paginatedLocalJobs.map((job) => {
                                 const outputUrls = getLocalJobOutputUrls(job)
                                 const storedOutputUrls = getStoredLocalJobOutputUrls(job)
                                 const canPreview = job.status === 'completed' && outputUrls.length > 0
@@ -940,6 +974,7 @@ export default function MockupPage() {
 
                                 return (
                                     <div key={job.id} className="border-b border-zinc-100 last:border-b-0">
+                                        {job.status === "failed" && job.error_message ? <p className="px-3 pt-2 text-xs text-rose-700">Lỗi: {job.error_message}</p> : null}
                                         <button
                                             type="button"
                                             disabled={!canPreview}
@@ -962,7 +997,8 @@ export default function MockupPage() {
                                 )
                             })}
                         </div>
-                    ) : <p className="mt-2 text-xs text-zinc-500">Chưa có job mockup nào.</p>}
+                    ) : <p className="mt-2 text-xs text-zinc-500">Không có job phù hợp bộ lọc.</p>}
+                    {(localWorkerStatus?.jobTotal || 0) > localJobPageSize ? <div className="mt-2 flex items-center justify-between text-xs"><span>Trang {localJobPage} / {localJobTotalPages} · {localWorkerStatus?.jobTotal || 0} job</span><div className="flex gap-2"><button type="button" disabled={localJobPage <= 1} onClick={() => setLocalJobPage((page) => page - 1)} className="rounded border px-2 py-1 disabled:opacity-40">Trước</button><button type="button" disabled={localJobPage >= localJobTotalPages} onClick={() => setLocalJobPage((page) => page + 1)} className="rounded border px-2 py-1 disabled:opacity-40">Sau</button></div></div> : null}
                     {isLocalWorkerSettingsOpen ? (
                 <div className="mt-2 rounded-xl border border-sky-200 bg-sky-50 p-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -970,6 +1006,14 @@ export default function MockupPage() {
                             <p className="text-sm font-semibold text-sky-900">Local Mockup Worker</p>
                             <p className="text-xs text-sky-700">Poll MySQL local mỗi 2 giây; nhận mọi job đang `waiting` có product khớp với asset và PSD template.</p>
                         </div>
+                        <button
+                            type="button"
+                            onClick={handleLocalWorkerRestart}
+                            disabled={isLocalWorkerSaving}
+                            className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                        >
+                            Khởi động worker
+                        </button>
                         <button
                             type="button"
                             onClick={handleLocalWorkerToggle}

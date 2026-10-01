@@ -45,6 +45,7 @@ const IS_LOCAL_MOCKUP_WORKER_PROCESS = process.argv.includes('--local-mockup-wor
 // the UI is already open.
 const HAS_LOCAL_MOCKUP_WORKER_LOCK = true;
 const MAX_REMOTE_MASTER_IMAGE_BYTES = 50 * 1024 * 1024;
+const LOCAL_MOCKUP_STALE_PROCESSING_MINUTES = 30;
 
 let geminiAppWindow = null;
 let geminiChromeProcess = null;
@@ -123,7 +124,7 @@ function getDefaultLocalMockupWorkerConfig() {
     storageRoot: process.env.OFFOREST_LOCAL_STORAGE_ROOT || '',
     outputDir: process.env.OFFOREST_LOCAL_OUTPUT_DIR || path.join(app.getPath('userData'), 'local-mockup-output'),
     pollIntervalMs: Math.max(500, Number(process.env.OFFOREST_LOCAL_MOCKUP_POLL_MS || 2000)),
-    concurrency: Math.max(1, Math.min(5, Number(process.env.OFFOREST_LOCAL_MOCKUP_CONCURRENCY || 1) || 1)),
+    concurrency: Math.max(1, Math.min(10, Number(process.env.OFFOREST_LOCAL_MOCKUP_CONCURRENCY || 1) || 1)),
   };
 }
 
@@ -217,7 +218,7 @@ async function saveLocalMockupWorkerConfig(payload) {
     storageRoot: String(payload?.storageRoot || '').trim(),
     outputDir: String(payload?.outputDir || current.outputDir).trim(),
     pollIntervalMs: Math.max(500, Number(payload?.pollIntervalMs || current.pollIntervalMs) || 2000),
-    concurrency: Math.max(1, Math.min(5, Number(payload?.concurrency || current.concurrency) || 1)),
+    concurrency: Math.max(1, Math.min(10, Number(payload?.concurrency || current.concurrency) || 1)),
   };
 
   if (!next.host || !next.user || !next.database || !next.outputDir) {
@@ -401,6 +402,16 @@ async function claimLocalMockupJob(connection) {
   }
 }
 
+async function recoverStaleLocalMockupJobs(connection) {
+  await connection.query(
+    `UPDATE psd_local_mockup_jobs
+     SET status = 'waiting', claimed_at = NULL, error_message = NULL
+     WHERE status = 'processing'
+       AND claimed_at IS NOT NULL
+       AND claimed_at < (NOW() - INTERVAL 30 MINUTE)`
+  );
+}
+
 async function processLocalMockupJob(config, job) {
   const masterSource = job.master_image_uri || job.asset_redesign;
   const psdPath = await resolveLocalMockupTemplatePath(config.storageRoot, job.template_storage_path);
@@ -437,6 +448,7 @@ async function runLocalMockupWorkerOnce() {
     connection = await mysql.createConnection({
       host: config.host, port: config.port, user: config.user, password: config.password, database: config.database, connectTimeout: 10_000,
     });
+    await recoverStaleLocalMockupJobs(connection);
     const job = await claimLocalMockupJob(connection);
     if (!job) return null;
     try {
@@ -498,7 +510,12 @@ function stopLocalMockupWorker() {
   return getLocalMockupWorkerStatus();
 }
 
-async function getLocalMockupWorkerStatus() {
+async function getLocalMockupWorkerStatus(query = {}) {
+  const requestedStatus = String(query?.status || 'all').trim();
+  const jobStatus = ['waiting', 'processing', 'completed', 'failed'].includes(requestedStatus) ? requestedStatus : 'all';
+  const search = String(query?.search || '').trim().slice(0, 100);
+  const page = Math.max(1, Math.min(100000, Math.trunc(Number(query?.page) || 1)));
+  const pageSize = 20;
   if (localMockupWorkerTimer) {
     // Status polling doubles as a recovery trigger if an idle worker missed a timer tick.
     void fillLocalMockupWorkerSlots();
@@ -511,6 +528,9 @@ async function getLocalMockupWorkerStatus() {
     lastResult: localMockupWorkerLastResult,
     summary: { waiting: 0, processing: 0, completed: 0, failed: 0 },
     jobs: [],
+    jobPage: page,
+    jobPageSize: pageSize,
+    jobTotal: 0,
   };
   if (!IS_LOCAL_MOCKUP_WORKER_PROCESS) {
     const backgroundState = await readLocalMockupWorkerState();
@@ -533,15 +553,30 @@ async function getLocalMockupWorkerStatus() {
     summaryRows.forEach((row) => {
       if (Object.hasOwn(status.summary, row.status)) status.summary[row.status] = Number(row.total) || 0;
     });
+    const filters = [];
+    const params = [];
+    if (jobStatus !== 'all') {
+      filters.push('j.status = ?');
+      params.push(jobStatus);
+    }
+    if (search) {
+      filters.push('(CAST(j.id AS CHAR) LIKE ? OR CAST(j.product_design_asset_id AS CHAR) LIKE ? OR CAST(a.item_number AS CHAR) LIKE ? OR p.slug LIKE ? OR j.job_uuid LIKE ?)');
+      params.push(...Array(5).fill(`%${search}%`));
+    }
+    const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+    const joins = `LEFT JOIN product_design_assets a ON a.id = j.product_design_asset_id
+      LEFT JOIN products p ON p.id = j.product_id`;
+    const [[countRow]] = await connection.query(`SELECT COUNT(*) AS total FROM psd_local_mockup_jobs j ${joins} ${whereClause}`, params);
+    status.jobTotal = Number(countRow.total) || 0;
     const [jobs] = await connection.query(`
       SELECT j.id, j.job_uuid, j.product_design_asset_id, j.status, j.attempts, j.output_urls, j.error_message,
         j.claimed_at, j.completed_at, j.created_at, a.user_id, a.item_number, p.slug AS product_slug
       FROM psd_local_mockup_jobs j
-      LEFT JOIN product_design_assets a ON a.id = j.product_design_asset_id
-      LEFT JOIN products p ON p.id = j.product_id
+      ${joins}
+      ${whereClause}
       ORDER BY j.id DESC
-      LIMIT 20
-    `);
+      LIMIT ? OFFSET ?
+    `, [...params, pageSize, (page - 1) * pageSize]);
     status.jobs = jobs.map((job) => {
       let outputUrls = [];
       try {
@@ -980,12 +1015,23 @@ function findTemplateLayerOutsideMockupGroups(psd) {
   return templateLayer;
 }
 
-async function replaceDesignLayers(psd, designDataUrl) {
+async function replaceDesignLayers(psd, designDataUrl, productSlug = '') {
   const designLayers = [];
-  walkLayers(psd?.children || [], (layer) => {
-    if (isDesignTargetLayer(layer)) {
-      designLayers.push(layer);
+  const collectDesignLayers = (layers, insideMockupGroup = false) => {
+    for (const layer of layers || []) {
+      const mockupGroup = isMockupGroup(layer);
+      const nextInsideMockupGroup = insideMockupGroup || mockupGroup
+      if (!nextInsideMockupGroup && isDesignTargetLayer(layer)) designLayers.push(layer);
+      if (Array.isArray(layer?.children)) collectDesignLayers(layer.children, nextInsideMockupGroup);
     }
+  };
+  collectDesignLayers(psd?.children || []);
+
+  // ag-psd does not propagate edits to other smart objects as Photoshop does.
+  // Decode the master once, then update each Design layer in the in-memory PSD
+  // so independently placed copies inside MOCKUP groups use the new artwork.
+  walkLayers(psd?.children || [], (layer) => {
+    if (isDesignTargetLayer(layer) && !designLayers.includes(layer)) designLayers.push(layer);
   });
 
   if (!designLayers.length) {
@@ -998,15 +1044,21 @@ async function replaceDesignLayers(psd, designDataUrl) {
 
   for (const designLayer of designLayers) {
     const bounds = getLayerBounds(designLayer);
-    const targetBounds = templateBounds || bounds;
+    const hasPlacedTransform = Array.isArray(designLayer?.placedLayer?.nonAffineTransform)
+      ? designLayer.placedLayer.nonAffineTransform.length === 8
+      : Array.isArray(designLayer?.placedLayer?.transform) && designLayer.placedLayer.transform.length === 8;
+    const preserveSmartObjectCanvas = productSlug === 'sticker' && hasPlacedTransform;
+    const sourceWidth = toPositiveInt(designLayer?.placedLayer?.width, bounds.width);
+    const sourceHeight = toPositiveInt(designLayer?.placedLayer?.height, bounds.height);
+    const targetBounds = preserveSmartObjectCanvas ? bounds : (templateBounds || bounds);
     const targetWidth = toPositiveInt(targetBounds.width, 1);
     const targetHeight = toPositiveInt(targetBounds.height, 1);
-    const layerCanvas = createCanvas(targetWidth, targetHeight);
+    const layerCanvas = createCanvas(preserveSmartObjectCanvas ? sourceWidth : targetWidth, preserveSmartObjectCanvas ? sourceHeight : targetHeight);
     const ctx = layerCanvas.getContext('2d');
-    ctx.clearRect(0, 0, targetWidth, targetHeight);
-    ctx.drawImage(image, 0, 0, targetWidth, targetHeight);
+    ctx.clearRect(0, 0, layerCanvas.width, layerCanvas.height);
+    ctx.drawImage(image, 0, 0, layerCanvas.width, layerCanvas.height);
     designLayer.canvas = layerCanvas;
-    if (templateBounds) {
+    if (templateBounds && !preserveSmartObjectCanvas) {
       designLayer.left = templateBounds.left;
       designLayer.top = templateBounds.top;
       designLayer.right = templateBounds.right;
@@ -1265,13 +1317,11 @@ function drawPsdToCanvas(psd, layersToDraw = null) {
     const bounds = getLayerBounds(layer);
     const layerCanvas = createCanvas(width, height);
     const layerContext = layerCanvas.getContext('2d');
-    // A replaced Design layer already has its canvas and document bounds
-    // normalized to the Template layer. Do not reuse the original smart-object
-    // quad here, because it would overwrite the new bounds and make ag-psd
-    // differ from Photoshop's Edit Contents + resize/translate result.
-    const placedQuad = layer?.[OFFOREST_REPLACED_DESIGN_LAYER]
-      ? null
-      : getPlacedLayerQuad(layer, srcCanvas);
+    // Keep the original smart-object quad for ag-psd products such as sticker:
+    // rotation, skew, and perspective are part of the mockup effect. Glass is
+    // routed through Photoshop before reaching this renderer, so preserving
+    // the quad here does not reintroduce the glass mismatch.
+    const placedQuad = getPlacedLayerQuad(layer, srcCanvas);
     layerContext.save();
     layerContext.globalAlpha = Math.max(0, Math.min(1, inheritedOpacity));
     if (placedQuad) {
@@ -1356,7 +1406,7 @@ function drawPsdToCanvas(psd, layersToDraw = null) {
   return canvas;
 }
 
-async function renderMockupsFromPsd({ psdPath, designDataUrl, onOutput = null, skipCollectOutputs = false }) {
+async function renderMockupsFromPsd({ psdPath, designDataUrl, productSlug = '', onOutput = null, skipCollectOutputs = false }) {
   if (!psdPath) {
     throw new Error('Thiếu đường dẫn file PSD');
   }
@@ -1373,7 +1423,7 @@ async function renderMockupsFromPsd({ psdPath, designDataUrl, onOutput = null, s
     skipCompositeImageData: false,
   });
 
-  const replacedDesignLayerCount = await replaceDesignLayers(psd, designDataUrl);
+  const replacedDesignLayerCount = await replaceDesignLayers(psd, designDataUrl, productSlug);
 
   const mockupGroups = collectMockupGroups(psd);
   if (!mockupGroups.length) {
@@ -2496,7 +2546,7 @@ async function renderLocalMockupWithFallbacks({ psdPath, designDataUrl, productS
 
   let primaryError;
   try {
-    return await renderMockupsFromPsd({ psdPath, designDataUrl });
+    return await renderMockupsFromPsd({ psdPath, designDataUrl, productSlug: normalizedProductSlug });
   } catch (error) {
     primaryError = error;
     if (!/invalid svg image/i.test(String(error?.message || ''))) {
@@ -2769,14 +2819,14 @@ function registerMockupIpc() {
   });
 
   ipcMain.handle('local-mockup-worker:start', async () => {
-    if (!IS_LOCAL_MOCKUP_WORKER_PROCESS) return getLocalMockupWorkerStatus();
+    if (!IS_LOCAL_MOCKUP_WORKER_PROCESS) return ensureBackgroundLocalMockupWorker();
     return startLocalMockupWorker();
   });
   ipcMain.handle('local-mockup-worker:stop', async () => {
     if (!IS_LOCAL_MOCKUP_WORKER_PROCESS) return getLocalMockupWorkerStatus();
     return stopLocalMockupWorker();
   });
-  ipcMain.handle('local-mockup-worker:status', async () => getLocalMockupWorkerStatus());
+  ipcMain.handle('local-mockup-worker:status', async (_event, query) => getLocalMockupWorkerStatus(query));
 
   ipcMain.handle('mockup:resolve-image-data-url', async (_event, payload) => {
     const sourceUrl = String(payload?.sourceUrl || '').trim();
