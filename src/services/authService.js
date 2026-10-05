@@ -25,10 +25,11 @@ const API_BASE_URL = 'https://nhxlap.id.vn/wp-json/offorest-api/v1'
 export const AUTH_LOGOUT_EVENT = 'offorest:auth-logout'
 
 const getLocalMockupBypassUser = () => {
+  const isElectronDesktop = typeof window !== 'undefined' && Boolean(window.offorestMockup);
   const isLocalMockupBypassEnabled =
-    import.meta.env.DEV && import.meta.env.VITE_OFFOREST_LOCAL_MOCKUP_BYPASS === 'true'
+    isElectronDesktop || (import.meta.env.DEV && import.meta.env.VITE_OFFOREST_LOCAL_MOCKUP_BYPASS === 'true');
 
-  if (!isLocalMockupBypassEnabled) return null
+  if (!isLocalMockupBypassEnabled) return null;
 
   return {
     id: 'local-mockup-user',

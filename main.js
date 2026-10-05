@@ -124,7 +124,7 @@ function getDefaultLocalMockupWorkerConfig() {
     storageRoot: process.env.OFFOREST_LOCAL_STORAGE_ROOT || '',
     outputDir: process.env.OFFOREST_LOCAL_OUTPUT_DIR || path.join(app.getPath('userData'), 'local-mockup-output'),
     pollIntervalMs: Math.max(500, Number(process.env.OFFOREST_LOCAL_MOCKUP_POLL_MS || 2000)),
-    concurrency: Math.max(1, Math.min(10, Number(process.env.OFFOREST_LOCAL_MOCKUP_CONCURRENCY || 1) || 1)),
+    concurrency: Math.max(1, Math.min(5, Number(process.env.OFFOREST_LOCAL_MOCKUP_CONCURRENCY || 1) || 1)),
   };
 }
 
@@ -218,7 +218,7 @@ async function saveLocalMockupWorkerConfig(payload) {
     storageRoot: String(payload?.storageRoot || '').trim(),
     outputDir: String(payload?.outputDir || current.outputDir).trim(),
     pollIntervalMs: Math.max(500, Number(payload?.pollIntervalMs || current.pollIntervalMs) || 2000),
-    concurrency: Math.max(1, Math.min(10, Number(payload?.concurrency || current.concurrency) || 1)),
+    concurrency: Math.max(1, Math.min(5, Number(payload?.concurrency || current.concurrency) || 1)),
   };
 
   if (!next.host || !next.user || !next.database || !next.outputDir) {
@@ -289,6 +289,21 @@ function imageFileToDataUrl(filePath) {
   });
 }
 
+async function waitForLocalFile(filePath, timeoutMs = 30_000, intervalMs = 1_000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError;
+  while (Date.now() < deadline) {
+    try {
+      await fs.access(filePath);
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+  }
+  throw lastError || new Error('Không tìm thấy file: ' + filePath);
+}
+
 function getGoogleDriveDownloadUrl(sourceUrl) {
   const driveFileId = String(sourceUrl).match(/(?:\/d\/|[?&]id=)([-\w]{10,})/i)?.[1];
   if (!driveFileId) return sourceUrl;
@@ -345,7 +360,9 @@ async function getMasterImageDataUrl(config, source) {
   const sourceValue = String(source || '').trim();
   if (!sourceValue) throw new Error('Thiếu ảnh master trong job.');
   if (/^https?:\/\//i.test(sourceValue)) return remoteImageUrlToDataUrl(sourceValue);
-  return imageFileToDataUrl(toSafeStoragePath(config.storageRoot, sourceValue));
+  const localPath = toSafeStoragePath(config.storageRoot, sourceValue);
+  await waitForLocalFile(localPath);
+  return imageFileToDataUrl(localPath);
 }
 
 async function readLocalMockupOutputDataUrl(outputUrl) {
@@ -452,7 +469,22 @@ async function runLocalMockupWorkerOnce() {
     const job = await claimLocalMockupJob(connection);
     if (!job) return null;
     try {
-      const outputUrls = await processLocalMockupJob(config, job);
+      let outputUrls;
+      let lastRenderError;
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        try {
+          outputUrls = await processLocalMockupJob(config, job);
+          if (!Array.isArray(outputUrls) || !outputUrls.length) throw new Error('Renderer không tạo output.');
+          break;
+        } catch (renderError) {
+          lastRenderError = renderError;
+          if (attempt < 2) {
+            console.warn('[LocalMockupWorker] Render retry', { jobId: job.id, attempt, error: renderError?.message });
+            await new Promise((resolve) => setTimeout(resolve, 800));
+          }
+        }
+      }
+      if (!outputUrls?.length) throw lastRenderError || new Error('Renderer không tạo output.');
       const assetUpdates = Array.from({ length: 11 }, (_, index) => outputUrls[index] || null);
       const columns = assetUpdates.map((_, index) => `mockup${index + 1} = ?`).join(', ');
       await connection.query(`UPDATE product_design_assets SET ${columns} WHERE id = ?`, [...assetUpdates, job.product_design_asset_id]);
@@ -1038,7 +1070,17 @@ async function replaceDesignLayers(psd, designDataUrl, productSlug = '') {
     throw new Error('Không tìm thấy layer tên "Design" trong file PSD.');
   }
 
-  const image = await loadImage(designDataUrl);
+  let image;
+  try {
+    image = await loadImage(designDataUrl);
+  } catch (error) {
+    if (!/invalid svg image/i.test(String(error?.message || '')) || !designDataUrl.startsWith('data:image/png;base64,')) throw error;
+    // Some valid PNG encodings are misdetected as SVG by napi-canvas.
+    // Re-encode pixels without changing the artwork before retrying the decoder.
+    const sourceBuffer = Buffer.from(designDataUrl.slice('data:image/png;base64,'.length), 'base64');
+    const normalizedPng = PNG.sync.write(PNG.sync.read(sourceBuffer));
+    image = await loadImage(normalizedPng);
+  }
   const templateLayer = findTemplateLayerOutsideMockupGroups(psd);
   const templateBounds = templateLayer ? getLayerBounds(templateLayer) : null;
 
@@ -1047,7 +1089,7 @@ async function replaceDesignLayers(psd, designDataUrl, productSlug = '') {
     const hasPlacedTransform = Array.isArray(designLayer?.placedLayer?.nonAffineTransform)
       ? designLayer.placedLayer.nonAffineTransform.length === 8
       : Array.isArray(designLayer?.placedLayer?.transform) && designLayer.placedLayer.transform.length === 8;
-    const preserveSmartObjectCanvas = productSlug === 'sticker' && hasPlacedTransform;
+    const preserveSmartObjectCanvas = ['sticker', 'decal'].includes(productSlug) && hasPlacedTransform;
     const sourceWidth = toPositiveInt(designLayer?.placedLayer?.width, bounds.width);
     const sourceHeight = toPositiveInt(designLayer?.placedLayer?.height, bounds.height);
     const targetBounds = preserveSmartObjectCanvas ? bounds : (templateBounds || bounds);
@@ -1064,6 +1106,8 @@ async function replaceDesignLayers(psd, designDataUrl, productSlug = '') {
       designLayer.right = templateBounds.right;
       designLayer.bottom = templateBounds.bottom;
     }
+    designLayer.hidden = false;
+    designLayer.visible = true;
     designLayer[OFFOREST_REPLACED_DESIGN_LAYER] = true;
   }
 
@@ -2358,9 +2402,10 @@ function buildPhotoshopRenderJsx({ psdPath, designImagePath, outputDir }) {
     '    var dy = (soH - (b[3].as("px") - b[1].as("px"))) / 2 - b[1].as("px");',
     '    newLayer.translate(dx, dy);',
     '  }',
-    '  if (soDoc.layers.length > 1) {',
-    '    for (var i = 1; i < soDoc.layers.length; i++) { soDoc.layers[i].visible = false; }',
+    '  for (var i = 0; i < soDoc.layers.length; i++) {',
+    '    soDoc.layers[i].visible = soDoc.layers[i] === newLayer;',
     '  }',
+    '  newLayer.visible = true;',
     '  soDoc.close(SaveOptions.SAVECHANGES);',
     '}',
     '',
@@ -2536,6 +2581,7 @@ function enqueuePhotoshopRender(renderOptions) {
 
 async function renderLocalMockupWithFallbacks({ psdPath, designDataUrl, productSlug = '' }) {
   const normalizedProductSlug = String(productSlug || '').trim().toLowerCase();
+
   if (normalizedProductSlug === 'glass') {
     const photoshopResult = await enqueuePhotoshopRender({ psdPath, designDataUrl });
     return {
@@ -3320,4 +3366,13 @@ app.on('window-all-closed', () => {
     app.quit();
   }
 });
+
+
+
+
+
+
+
+
+
 
