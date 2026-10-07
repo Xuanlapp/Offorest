@@ -602,7 +602,7 @@ async function getLocalMockupWorkerStatus(query = {}) {
     status.jobTotal = Number(countRow.total) || 0;
     const [jobs] = await connection.query(`
       SELECT j.id, j.job_uuid, j.product_design_asset_id, j.status, j.attempts, j.output_urls, j.error_message,
-        j.claimed_at, j.completed_at, j.created_at, a.user_id, a.item_number, p.slug AS product_slug
+        j.claimed_at, j.completed_at, j.created_at, a.user_id, a.sku, a.item_number, p.slug AS product_slug
       FROM psd_local_mockup_jobs j
       ${joins}
       ${whereClause}

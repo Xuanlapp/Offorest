@@ -21,10 +21,11 @@ const getLocalJobLabel = (job) => {
     const userId = String(job?.user_id ?? '').trim()
     const slug = String(job?.product_slug ?? '').trim()
     const itemNumber = String(job?.item_number ?? '').trim()
+    const sku = String(job?.sku ?? '').trim()
     const assetId = String(job?.product_design_asset_id ?? '').trim()
 
     return userId && slug && itemNumber && assetId
-        ? `${userId} - ${slug} - ${itemNumber} - ID ${assetId}`
+        ? `${userId} - ${slug} - ${itemNumber} - ${sku ? `SKU ${sku} - ` : ''}ID ${assetId}`
         : `Job #${job?.id || 'unknown'}`
 }
 
@@ -971,6 +972,8 @@ export default function MockupPage() {
                                 const canPreview = job.status === 'completed' && outputUrls.length > 0
                                 const isExpanded = expandedLocalJobId === job.id
                                 const jobLabel = getLocalJobLabel(job)
+                                const jobDate = job.created_at || job.claimed_at || job.completed_at
+                                const jobDateLabel = jobDate ? new Date(jobDate).toLocaleString('vi-VN') : 'Chưa có thời gian'
 
                                 return (
                                     <div key={job.id} className="border-b border-zinc-100 last:border-b-0">
@@ -981,7 +984,7 @@ export default function MockupPage() {
                                             onClick={() => setExpandedLocalJobId((current) => current === job.id ? null : job.id)}
                                             className={`flex w-full flex-wrap items-center justify-between gap-2 px-3 py-2 text-left ${canPreview ? 'hover:bg-zinc-50' : 'cursor-default'}`}
                                         >
-                                            <span className="font-medium text-zinc-700">{jobLabel}{canPreview ? ` (${outputUrls.length} ảnh)` : ''}</span>
+                                            <span className="min-w-0 font-medium text-zinc-700"><span className="block">{jobLabel}{canPreview ? ` (${outputUrls.length} ảnh)` : ''}</span><span className="mt-0.5 block text-[11px] font-normal text-zinc-500">{jobDateLabel}</span></span>
                                             <span className={`rounded-full px-2 py-0.5 font-medium ${job.status === 'completed' ? 'bg-emerald-100 text-emerald-800' : job.status === 'processing' ? 'bg-sky-100 text-sky-800' : job.status === 'failed' ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'}`}>{job.status === 'waiting' ? 'Chờ xử lý' : job.status === 'processing' ? 'Đang làm' : job.status === 'completed' ? 'Đã xong' : 'Lỗi'}</span>
                                         </button>
                                         {isExpanded ? (
