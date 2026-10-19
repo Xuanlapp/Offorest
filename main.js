@@ -2,10 +2,11 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage } from 'ele
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 import electronUpdaterPkg from 'electron-updater';
 import { readPsd, initializeCanvas } from 'ag-psd';
 import { createCanvas, ImageData, loadImage } from '@napi-rs/canvas';
@@ -15,6 +16,8 @@ const PSD = require('psd');
 const { PNG } = require('pngjs');
 const mysql = require('mysql2/promise');
 const dotenv = require('dotenv');
+
+const execFileAsync = promisify(execFile);
 
 const { autoUpdater } = electronUpdaterPkg;
 
@@ -45,7 +48,18 @@ const IS_LOCAL_MOCKUP_WORKER_PROCESS = process.argv.includes('--local-mockup-wor
 // the UI is already open.
 const HAS_LOCAL_MOCKUP_WORKER_LOCK = true;
 const MAX_REMOTE_MASTER_IMAGE_BYTES = 50 * 1024 * 1024;
-const LOCAL_MOCKUP_STALE_PROCESSING_MINUTES = 30;
+const LOCAL_MOCKUP_STALE_PROCESSING_MINUTES = 15;
+const LOCAL_MOCKUP_JOB_HEARTBEAT_MS = 20_000;
+const LOCAL_MOCKUP_CLAIM_LOCK_NAME = 'offorest_local_mockup_job_claim_v1';
+const LOCAL_MOCKUP_CLAIM_LOCK_TIMEOUT_SECONDS = 5;
+const LOCAL_MOCKUP_AG_PSD_CONCURRENCY = 10;
+const LOCAL_MOCKUP_PHOTOSHOP_CONCURRENCY = 1;
+const LOCAL_MOCKUP_TOTAL_CONCURRENCY = LOCAL_MOCKUP_AG_PSD_CONCURRENCY + LOCAL_MOCKUP_PHOTOSHOP_CONCURRENCY;
+const LOCAL_MOCKUP_PHOTOSHOP_PRODUCTS = ['glass', 'ceramic'];
+const PHOTOSHOP_RENDER_LOCK_NAME = 'offorest_photoshop_render_v1';
+const PHOTOSHOP_RENDER_LOCK_TIMEOUT_SECONDS = 660;
+const LOCAL_MOCKUP_DB_RETRY_ATTEMPTS = 4;
+const LOCAL_MOCKUP_DB_RETRY_DELAY_MS = 500;
 
 let geminiAppWindow = null;
 let geminiChromeProcess = null;
@@ -55,6 +69,27 @@ let geminiLastOutputHash = '';
 let localMockupWorkerTimer = null;
 let localMockupWorkerActiveCount = 0;
 let localMockupWorkerLastResult = null;
+
+function isMySqlDeadlock(error) {
+  return error?.code === 'ER_LOCK_DEADLOCK'
+    || Number(error?.errno) === 1213
+    || /deadlock found when trying to get lock/i.test(String(error?.message || ''));
+}
+
+async function withLocalMockupDbRetry(operation, label = 'database operation') {
+  let lastError;
+  for (let attempt = 1; attempt <= LOCAL_MOCKUP_DB_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (!isMySqlDeadlock(error) || attempt >= LOCAL_MOCKUP_DB_RETRY_ATTEMPTS) throw error;
+      console.warn('[LocalMockupWorker] MySQL deadlock; retrying', { label, attempt });
+      await new Promise((resolve) => setTimeout(resolve, LOCAL_MOCKUP_DB_RETRY_DELAY_MS * attempt));
+    }
+  }
+  throw lastError;
+}
 let localPhotoshopRenderQueue = Promise.resolve();
 
 function getLocalMockupWorkerConfigPath() {
@@ -124,7 +159,8 @@ function getDefaultLocalMockupWorkerConfig() {
     storageRoot: process.env.OFFOREST_LOCAL_STORAGE_ROOT || '',
     outputDir: process.env.OFFOREST_LOCAL_OUTPUT_DIR || path.join(app.getPath('userData'), 'local-mockup-output'),
     pollIntervalMs: Math.max(500, Number(process.env.OFFOREST_LOCAL_MOCKUP_POLL_MS || 2000)),
-    concurrency: Math.max(1, Math.min(5, Number(process.env.OFFOREST_LOCAL_MOCKUP_CONCURRENCY || 1) || 1)),
+    // Reserve one slot for Photoshop while ag-psd uses ten independent slots.
+    concurrency: LOCAL_MOCKUP_TOTAL_CONCURRENCY,
   };
 }
 
@@ -218,7 +254,7 @@ async function saveLocalMockupWorkerConfig(payload) {
     storageRoot: String(payload?.storageRoot || '').trim(),
     outputDir: String(payload?.outputDir || current.outputDir).trim(),
     pollIntervalMs: Math.max(500, Number(payload?.pollIntervalMs || current.pollIntervalMs) || 2000),
-    concurrency: Math.max(1, Math.min(5, Number(payload?.concurrency || current.concurrency) || 1)),
+    concurrency: LOCAL_MOCKUP_TOTAL_CONCURRENCY,
   };
 
   if (!next.host || !next.user || !next.database || !next.outputDir) {
@@ -383,8 +419,14 @@ function getSafeMockupOutputFileName(name, index) {
 }
 
 async function claimLocalMockupJob(connection) {
-  await connection.beginTransaction();
+  const [lockRows] = await connection.query('SELECT GET_LOCK(?, ?) AS acquired', [
+    LOCAL_MOCKUP_CLAIM_LOCK_NAME,
+    LOCAL_MOCKUP_CLAIM_LOCK_TIMEOUT_SECONDS,
+  ]);
+  if (Number(lockRows?.[0]?.acquired) !== 1) return null;
+
   try {
+    await connection.beginTransaction();
     const [rows] = await connection.query(`
       SELECT j.*, a.user_id AS asset_user_id, a.product_id AS asset_product_id, a.redesign AS asset_redesign,
         p.slug AS verified_product_slug, t.user_id AS template_user_id, t.product_id AS template_product_id,
@@ -395,9 +437,26 @@ async function claimLocalMockupJob(connection) {
       INNER JOIN psd_mockup_templates t ON t.id = j.psd_mockup_template_id
       WHERE j.status = 'waiting' AND p.slug = j.product_slug
         AND a.product_id = j.product_id AND a.user_id = t.user_id AND a.product_id = t.product_id
-        AND a.is_approved = 0 AND a.redesign IS NOT NULL AND a.redesign <> ''
+        AND a.redesign IS NOT NULL AND a.redesign <> ''
+        AND (
+          (j.product_slug IN ('glass', 'ceramic') AND NOT EXISTS (
+            SELECT 1
+            FROM psd_local_mockup_jobs active_photoshop_job
+            WHERE active_photoshop_job.status = 'processing'
+              AND active_photoshop_job.executed_by = 'local'
+              AND active_photoshop_job.product_slug IN ('glass', 'ceramic')
+          ))
+          OR
+          (j.product_slug NOT IN ('glass', 'ceramic') AND (
+            SELECT COUNT(*)
+            FROM psd_local_mockup_jobs active_ag_psd_job
+            WHERE active_ag_psd_job.status = 'processing'
+              AND active_ag_psd_job.executed_by = 'local'
+              AND active_ag_psd_job.product_slug NOT IN ('glass', 'ceramic')
+          ) < ?)
+        )
       ORDER BY j.id ASC LIMIT 1
-    `);
+    `, [LOCAL_MOCKUP_AG_PSD_CONCURRENCY]);
     const job = rows[0];
     if (!job) {
       await connection.commit();
@@ -416,17 +475,84 @@ async function claimLocalMockupJob(connection) {
   } catch (error) {
     await connection.rollback();
     throw error;
+  } finally {
+    try {
+      await connection.query('SELECT RELEASE_LOCK(?)', [LOCAL_MOCKUP_CLAIM_LOCK_NAME]);
+    } catch (error) {
+      console.warn('[LocalMockupWorker] Không thể giải phóng claim lock:', error?.message || error);
+    }
   }
 }
 
 async function recoverStaleLocalMockupJobs(connection) {
-  await connection.query(
+  const [result] = await connection.query(
     `UPDATE psd_local_mockup_jobs
-     SET status = 'waiting', claimed_at = NULL, error_message = NULL
+     SET status = 'waiting', claimed_at = NULL, completed_at = NULL,
+       executed_by = NULL, error_message = NULL
      WHERE status = 'processing'
+       AND executed_by = 'local'
        AND claimed_at IS NOT NULL
-       AND claimed_at < (NOW() - INTERVAL 30 MINUTE)`
+       AND claimed_at < (NOW() - INTERVAL ? MINUTE)`,
+    [LOCAL_MOCKUP_STALE_PROCESSING_MINUTES]
   );
+  if (result.affectedRows) {
+    console.warn('[LocalMockupWorker] Requeued stale local jobs', { count: result.affectedRows });
+  }
+  return Number(result.affectedRows) || 0;
+}
+
+function startLocalMockupJobHeartbeat(connection, jobId) {
+  let inFlight = false;
+  const refreshClaim = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      await connection.query(
+        `UPDATE psd_local_mockup_jobs
+         SET claimed_at = NOW()
+         WHERE id = ? AND status = 'processing' AND executed_by = 'local'`,
+        [jobId]
+      );
+    } catch (error) {
+      console.warn('[LocalMockupWorker] Job heartbeat failed', { jobId, error: error?.message || error });
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const timer = setInterval(() => { void refreshClaim(); }, LOCAL_MOCKUP_JOB_HEARTBEAT_MS);
+  return () => clearInterval(timer);
+}
+
+async function reloadStaleLocalMockupJobs({ force = false } = {}) {
+  const config = await getLocalMockupWorkerConfig();
+  const connection = await mysql.createConnection({
+    host: config.host,
+    port: config.port,
+    user: config.user,
+    password: config.password,
+    database: config.database,
+    connectTimeout: 10_000,
+  });
+
+  try {
+    const [result] = await connection.query(
+      `UPDATE psd_local_mockup_jobs
+       SET status = 'waiting', claimed_at = NULL, completed_at = NULL,
+         executed_by = NULL, error_message = NULL
+       WHERE status = 'processing'
+         AND executed_by = 'local'
+         AND (? = 1 OR (claimed_at IS NOT NULL AND claimed_at < (NOW() - INTERVAL ? MINUTE)))`,
+      [force ? 1 : 0, LOCAL_MOCKUP_STALE_PROCESSING_MINUTES]
+    );
+    return {
+      requeuedCount: Number(result.affectedRows) || 0,
+      forced: Boolean(force),
+      staleAfterMinutes: LOCAL_MOCKUP_STALE_PROCESSING_MINUTES,
+    };
+  } finally {
+    await connection.end();
+  }
 }
 
 async function processLocalMockupJob(config, job) {
@@ -434,8 +560,9 @@ async function processLocalMockupJob(config, job) {
   const psdPath = await resolveLocalMockupTemplatePath(config.storageRoot, job.template_storage_path);
   const productSlug = String(job.product_slug || '').trim().toLowerCase();
   if (!/^[a-z0-9-]+$/.test(productSlug)) throw new Error('Product slug trong job không hợp lệ.');
-  const outputRelativeDir = path.posix.join('generated', productSlug, 'mockups', String(job.product_design_asset_id));
+  const outputRelativeDir = path.posix.join('generated', productSlug, 'mockups', String(job.product_design_asset_id), 'thumbnails');
   const jobOutputDir = path.join(config.storageRoot, ...outputRelativeDir.split('/'));
+  const thumbnailDir = path.join(config.storageRoot, 'thumbnails', ...outputRelativeDir.split('/'));
   await Promise.all([fs.access(psdPath), fs.mkdir(jobOutputDir, { recursive: true })]);
   const rendered = await renderLocalMockupWithFallbacks({
     psdPath,
@@ -449,11 +576,25 @@ async function processLocalMockupJob(config, job) {
     const outputPath = path.join(jobOutputDir, fileName);
     const base64 = String(output.dataUrl).split(',')[1];
     if (!base64) throw new Error('Renderer không trả dữ liệu ảnh hợp lệ.');
-    await fs.writeFile(outputPath, Buffer.from(base64, 'base64'));
+    const pngBuffer = Buffer.from(base64, 'base64');
+    await fs.writeFile(outputPath, pngBuffer);
+    try {
+      const image = await loadImage(pngBuffer);
+      const scale = Math.min(1, 480 / Math.max(image.width, image.height));
+      const thumbnail = createCanvas(Math.max(1, Math.round(image.width * scale)), Math.max(1, Math.round(image.height * scale)));
+      thumbnail.getContext('2d').drawImage(image, 0, 0, thumbnail.width, thumbnail.height);
+      await fs.mkdir(thumbnailDir, { recursive: true });
+      await fs.writeFile(path.join(thumbnailDir, fileName), thumbnail.toBuffer('image/png'));
+    } catch (thumbnailError) {
+      console.warn('[LocalMockupWorker] Thumbnail failed', { jobId: job.id, fileName, error: thumbnailError?.message });
+    }
     outputUrls.push(`/storage/${outputRelativeDir}/${fileName}`);
   }
   if (!outputUrls.length) throw new Error('PSD không tạo ảnh mockup nào.');
-  return outputUrls;
+  return {
+    outputUrls,
+    renderer: String(rendered.renderer || 'ag-psd'),
+  };
 }
 
 async function runLocalMockupWorkerOnce() {
@@ -466,15 +607,19 @@ async function runLocalMockupWorkerOnce() {
       host: config.host, port: config.port, user: config.user, password: config.password, database: config.database, connectTimeout: 10_000,
     });
     await recoverStaleLocalMockupJobs(connection);
-    const job = await claimLocalMockupJob(connection);
+    const job = await withLocalMockupDbRetry(
+      () => claimLocalMockupJob(connection),
+      'claim job',
+    );
     if (!job) return null;
+    const stopHeartbeat = startLocalMockupJobHeartbeat(connection, job.id);
     try {
-      let outputUrls;
+      let renderResult;
       let lastRenderError;
       for (let attempt = 1; attempt <= 2; attempt += 1) {
         try {
-          outputUrls = await processLocalMockupJob(config, job);
-          if (!Array.isArray(outputUrls) || !outputUrls.length) throw new Error('Renderer không tạo output.');
+          renderResult = await processLocalMockupJob(config, job);
+          if (!Array.isArray(renderResult?.outputUrls) || !renderResult.outputUrls.length) throw new Error('Renderer không tạo output.');
           break;
         } catch (renderError) {
           lastRenderError = renderError;
@@ -484,17 +629,36 @@ async function runLocalMockupWorkerOnce() {
           }
         }
       }
-      if (!outputUrls?.length) throw lastRenderError || new Error('Renderer không tạo output.');
+      if (!renderResult?.outputUrls?.length) throw lastRenderError || new Error('Renderer không tạo output.');
+      const { outputUrls, renderer } = renderResult;
       const assetUpdates = Array.from({ length: 11 }, (_, index) => outputUrls[index] || null);
       const columns = assetUpdates.map((_, index) => `mockup${index + 1} = ?`).join(', ');
-      await connection.query(`UPDATE product_design_assets SET ${columns} WHERE id = ?`, [...assetUpdates, job.product_design_asset_id]);
-      await connection.query("UPDATE psd_local_mockup_jobs SET status = 'completed', output_urls = ?, completed_at = NOW(), error_message = NULL WHERE id = ?", [JSON.stringify(outputUrls), job.id]);
-      localMockupWorkerLastResult = { status: 'completed', jobId: job.id, outputCount: outputUrls.length, at: new Date().toISOString() };
+      await withLocalMockupDbRetry(
+        () => connection.query(`UPDATE product_design_assets SET ${columns} WHERE id = ?`, [...assetUpdates, job.product_design_asset_id]),
+        'update asset outputs',
+      );
+      const [completeResult] = await withLocalMockupDbRetry(
+        () => connection.query(
+          "UPDATE psd_local_mockup_jobs SET status = 'completed', output_urls = ?, completed_at = NOW(), error_message = NULL WHERE id = ? AND status = 'processing' AND executed_by = 'local'",
+          [JSON.stringify(outputUrls), job.id]
+        ),
+        'complete job',
+      );
+      if (!completeResult.affectedRows) throw new Error('Job đã được worker khác thu hồi trước khi ghi kết quả.');
+      localMockupWorkerLastResult = { status: 'completed', jobId: job.id, outputCount: outputUrls.length, renderer, at: new Date().toISOString() };
       return localMockupWorkerLastResult;
     } catch (error) {
-      await connection.query("UPDATE psd_local_mockup_jobs SET status = 'failed', error_message = ?, completed_at = NOW() WHERE id = ?", [String(error?.message || 'Local render failed').slice(0, 60000), job.id]);
+      await withLocalMockupDbRetry(
+        () => connection.query(
+          "UPDATE psd_local_mockup_jobs SET status = 'failed', error_message = ?, completed_at = NOW() WHERE id = ? AND status = 'processing' AND executed_by = 'local'",
+          [String(error?.message || 'Local render failed').slice(0, 60000), job.id]
+        ),
+        'fail job',
+      );
       localMockupWorkerLastResult = { status: 'failed', jobId: job.id, error: String(error?.message || 'Local render failed'), at: new Date().toISOString() };
       return localMockupWorkerLastResult;
+    } finally {
+      stopHeartbeat();
     }
   } finally {
     if (connection) await connection.end();
@@ -592,8 +756,8 @@ async function getLocalMockupWorkerStatus(query = {}) {
       params.push(jobStatus);
     }
     if (search) {
-      filters.push('(CAST(j.id AS CHAR) LIKE ? OR CAST(j.product_design_asset_id AS CHAR) LIKE ? OR CAST(a.item_number AS CHAR) LIKE ? OR p.slug LIKE ? OR j.job_uuid LIKE ?)');
-      params.push(...Array(5).fill(`%${search}%`));
+      filters.push('(CAST(j.id AS CHAR) LIKE ? OR CAST(j.product_design_asset_id AS CHAR) LIKE ? OR CAST(a.item_number AS CHAR) LIKE ? OR a.sku LIKE ? OR p.slug LIKE ? OR j.job_uuid LIKE ?)');
+      params.push(...Array(6).fill(`%${search}%`));
     }
     const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
     const joins = `LEFT JOIN product_design_assets a ON a.id = j.product_design_asset_id
@@ -2420,6 +2584,11 @@ function buildPhotoshopRenderJsx({ psdPath, designImagePath, outputDir }) {
     '    var bn = parseInt(String(b.name).replace(/[^0-9]/g, ""), 10) || 999999;',
     '    return an - bn;',
     '  });',
+    '  for (var groupIndex = 0; groupIndex < groups.length; groupIndex++) {',
+    '    var expectedNumber = groupIndex + 1;',
+    '    var actualNumber = parseInt(String(groups[groupIndex].name).replace(/[^0-9]/g, ""), 10);',
+    '    if (actualNumber !== expectedNumber) throw new Error("Các group MOCKUP phải liên tục từ MOCKUP 1; phát hiện MOCKUP " + actualNumber + " ở vị trí " + expectedNumber);',
+    '  }',
     '  return groups;',
     '}',
     '',
@@ -2466,8 +2635,8 @@ function buildPhotoshopRenderJsx({ psdPath, designImagePath, outputDir }) {
     '    for (var g = 0; g < groups.length; g++) { original.push(groups[g].visible); }',
     '    for (var j = 0; j < groups.length; j++) {',
     '      for (var k = 0; k < groups.length; k++) groups[k].visible = k === j;',
-    '      var safe = safeOutputName(groups[j].name);',
-    '      savePng(doc, outputDir.fsName + "/" + safe + ".png");',
+    '      var groupNumber = parseInt(String(groups[j].name).replace(/[^0-9]/g, ""), 10);',
+    '      savePng(doc, outputDir.fsName + "/MOCKUP " + groupNumber + ".png");',
     '    }',
     '    for (var r = 0; r < groups.length; r++) groups[r].visible = original[r];',
     '  }',
@@ -2486,6 +2655,117 @@ function buildPhotoshopRenderJsx({ psdPath, designImagePath, outputDir }) {
     '})();',
     '',
   ].join('\n');
+}
+
+const WINDOWS_FOCUS_API = `
+using System;
+using System.Runtime.InteropServices;
+public static class OfforestFocusApi {
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll", SetLastError = true)] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+}`;
+
+async function getForegroundWindowHandle() {
+  if (process.platform !== 'win32') return null;
+
+  try {
+    const { stdout } = await execFileAsync('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `Add-Type -TypeDefinition @'${WINDOWS_FOCUS_API}
+'@; [Console]::Write([OfforestFocusApi]::GetForegroundWindow().ToInt64())`,
+    ], { windowsHide: true, timeout: 5_000 });
+    const handle = String(stdout || '').trim();
+    return /^\d+$/.test(handle) && handle !== '0' ? handle : null;
+  } catch (error) {
+    console.warn('[PhotoshopBackground] Không đọc được cửa sổ foreground:', error?.message || error);
+    return null;
+  }
+}
+
+function createPhotoshopBackgroundFocusGuard(previousWindowHandle) {
+  if (process.platform !== 'win32' || !previousWindowHandle) return () => undefined;
+
+  let stopped = false;
+  let inFlight = false;
+  let loggedFailure = false;
+  const preventPhotoshopFocusSteal = async () => {
+    if (stopped || inFlight) return;
+    inFlight = true;
+    try {
+      await execFileAsync('powershell.exe', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `Add-Type -TypeDefinition @'${WINDOWS_FOCUS_API}
+'@;
+$previous = [IntPtr]::new([Int64]${previousWindowHandle});
+$foreground = [OfforestFocusApi]::GetForegroundWindow();
+if ($foreground -ne [IntPtr]::Zero -and [OfforestFocusApi]::IsWindow($foreground)) {
+  [uint32]$processId = 0;
+  [void][OfforestFocusApi]::GetWindowThreadProcessId($foreground, [ref]$processId);
+  $process = Get-Process -Id $processId -ErrorAction SilentlyContinue;
+  if ($process -and $process.ProcessName -like 'Photoshop*') {
+    [void][OfforestFocusApi]::SetForegroundWindow($previous);
+  }
+}
+}`,
+      ], { windowsHide: true, timeout: 5_000 });
+    } catch (error) {
+      if (!loggedFailure) {
+        console.warn('[PhotoshopBackground] Không thể ngăn Photoshop giành focus:', error?.message || error);
+        loggedFailure = true;
+      }
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const timer = setInterval(() => { void preventPhotoshopFocusSteal(); }, 750);
+  void preventPhotoshopFocusSteal();
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
+}
+
+async function withGlobalPhotoshopRenderLock(renderTask) {
+  const config = await getLocalMockupWorkerConfig();
+  const connection = await mysql.createConnection({
+    host: config.host,
+    port: config.port,
+    user: config.user,
+    password: config.password,
+    database: config.database,
+    connectTimeout: 10_000,
+  });
+
+  let hasLock = false;
+  try {
+    const [rows] = await connection.query('SELECT GET_LOCK(?, ?) AS acquired', [
+      PHOTOSHOP_RENDER_LOCK_NAME,
+      PHOTOSHOP_RENDER_LOCK_TIMEOUT_SECONDS,
+    ]);
+    hasLock = Number(rows?.[0]?.acquired) === 1;
+    if (!hasLock) {
+      throw new Error('Photoshop đang render một job khác quá lâu; job này sẽ được thử lại.');
+    }
+    return await renderTask();
+  } finally {
+    if (hasLock) {
+      try {
+        await connection.query('SELECT RELEASE_LOCK(?)', [PHOTOSHOP_RENDER_LOCK_NAME]);
+      } catch (error) {
+        console.warn('[PhotoshopRenderLock] Không thể giải phóng lock:', error?.message || error);
+      }
+    }
+    await connection.end();
+  }
 }
 
 async function renderMockupsWithPhotoshopEngine({ psdPath, designDataUrl }) {
@@ -2516,40 +2796,57 @@ async function renderMockupsWithPhotoshopEngine({ psdPath, designDataUrl }) {
 
   const completionPath = path.join(outputDir, '.offorest-complete');
   const errorPath = path.join(outputDir, '.offorest-error.txt');
+  const previousWindowHandle = await getForegroundWindowHandle();
   let launchError = null;
   const photoshopProcess = spawn(photoshopExe, ['-r', scriptPath], {
-    windowsHide: true,
+    // Keep Photoshop visible so the operator can inspect or use it while jobs render.
+    windowsHide: false,
     stdio: 'ignore',
   });
   photoshopProcess.once('error', (error) => {
     launchError = error;
   });
+  const stopFocusGuard = createPhotoshopBackgroundFocusGuard(previousWindowHandle);
 
-  const deadline = Date.now() + 10 * 60 * 1000;
-  while (Date.now() < deadline) {
-    if (launchError) throw launchError;
+  try {
+    const deadline = Date.now() + 10 * 60 * 1000;
+    while (Date.now() < deadline) {
+      if (launchError) throw launchError;
+      try {
+        await fs.access(completionPath);
+        break;
+      } catch {
+        try {
+          const scriptError = (await fs.readFile(errorPath, 'utf8')).trim();
+          throw new Error(`Photoshop script failed: ${scriptError || 'unknown error'}`);
+        } catch (error) {
+          if (String(error?.message || '').startsWith('Photoshop script failed:')) throw error;
+        }
+        await sleep(250);
+      }
+    }
     try {
       await fs.access(completionPath);
-      break;
     } catch {
-      try {
-        const scriptError = (await fs.readFile(errorPath, 'utf8')).trim();
-        throw new Error(`Photoshop script failed: ${scriptError || 'unknown error'}`);
-      } catch (error) {
-        if (String(error?.message || '').startsWith('Photoshop script failed:')) throw error;
-      }
-      await sleep(250);
+      throw new Error('Photoshop không báo hoàn tất export PNG trong 10 phút.');
     }
-  }
-  try {
-    await fs.access(completionPath);
-  } catch {
-    throw new Error('Photoshop không báo hoàn tất export PNG trong 10 phút.');
+  } finally {
+    stopFocusGuard();
   }
 
   const outputFiles = (await fs.readdir(outputDir))
     .filter((name) => /\.png$/i.test(name))
-    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+    .sort((a, b) => {
+      const numberOf = (name) => Number(String(name).match(/(\d+)/)?.[1] || Number.MAX_SAFE_INTEGER);
+      return numberOf(a) - numberOf(b) || a.localeCompare(b, undefined, { sensitivity: 'base' });
+    });
+
+  const outputNumbers = outputFiles.map((name) => Number(String(name).match(/(\d+)/)?.[1] || 0));
+  outputNumbers.forEach((number, index) => {
+    if (number !== index + 1) {
+      throw new Error(`PSD export không liên tục: cần MOCKUP ${index + 1}.png nhưng nhận MOCKUP ${number}.png.`);
+    }
+  });
 
   if (!outputFiles.length) {
     throw new Error('Photoshop đã chạy nhưng không tạo PNG nào. Kiểm tra layer Design/Smart Object và group MOCKUP * trong PSD.');
@@ -2574,7 +2871,9 @@ async function renderMockupsWithPhotoshopEngine({ psdPath, designDataUrl }) {
 }
 
 function enqueuePhotoshopRender(renderOptions) {
-  const renderTask = localPhotoshopRenderQueue.then(() => renderMockupsWithPhotoshopEngine(renderOptions));
+  const renderTask = localPhotoshopRenderQueue.then(() => withGlobalPhotoshopRenderLock(
+    () => renderMockupsWithPhotoshopEngine(renderOptions),
+  ));
   localPhotoshopRenderQueue = renderTask.catch(() => undefined);
   return renderTask;
 }
@@ -2582,11 +2881,13 @@ function enqueuePhotoshopRender(renderOptions) {
 async function renderLocalMockupWithFallbacks({ psdPath, designDataUrl, productSlug = '' }) {
   const normalizedProductSlug = String(productSlug || '').trim().toLowerCase();
 
-  if (normalizedProductSlug === 'glass') {
+  if (LOCAL_MOCKUP_PHOTOSHOP_PRODUCTS.includes(normalizedProductSlug)) {
+    console.info('[LocalMockupWorker] Rendering with Photoshop only', { productSlug: normalizedProductSlug });
     const photoshopResult = await enqueuePhotoshopRender({ psdPath, designDataUrl });
     return {
       ...photoshopResult,
-      warning: 'Sản phẩm glass được render trực tiếp bằng Photoshop để giữ chất lượng PSD chính xác nhất.',
+      renderer: 'photoshop',
+      warning: `Sản phẩm ${normalizedProductSlug} được render trực tiếp bằng Photoshop để giữ chất lượng PSD chính xác nhất.`,
     };
   }
 
@@ -2609,6 +2910,7 @@ async function renderLocalMockupWithFallbacks({ psdPath, designDataUrl, productS
     const photoshopResult = await enqueuePhotoshopRender({ psdPath, designDataUrl });
     return {
       ...photoshopResult,
+      renderer: 'photoshop',
       warning: `Đã fallback sang Photoshop sau lỗi ag-psd: ${primaryError?.message || 'Invalid SVG image'}`,
     };
   } catch (photoshopError) {
@@ -2871,6 +3173,16 @@ function registerMockupIpc() {
   ipcMain.handle('local-mockup-worker:stop', async () => {
     if (!IS_LOCAL_MOCKUP_WORKER_PROCESS) return getLocalMockupWorkerStatus();
     return stopLocalMockupWorker();
+  });
+  ipcMain.handle('local-mockup-worker:reload-stale-jobs', async (_event, payload) => {
+    const result = await reloadStaleLocalMockupJobs({ force: payload?.force === true });
+    // Kick the local worker after releasing stale jobs so they are claimed immediately.
+    if (IS_LOCAL_MOCKUP_WORKER_PROCESS) {
+      await startLocalMockupWorker();
+    } else {
+      await ensureBackgroundLocalMockupWorker();
+    }
+    return result;
   });
   ipcMain.handle('local-mockup-worker:status', async (_event, query) => getLocalMockupWorkerStatus(query));
 
@@ -3328,7 +3640,11 @@ app.whenReady().then(() => {
       void writeLocalMockupWorkerState();
       setInterval(() => { void writeLocalMockupWorkerState(); }, 2000);
       console.log('[LocalMockupWorker] Background worker started', {
-        concurrency: process.env.OFFOREST_LOCAL_MOCKUP_CONCURRENCY || '1',
+        concurrency: {
+          total: LOCAL_MOCKUP_TOTAL_CONCURRENCY,
+          photoshop: LOCAL_MOCKUP_PHOTOSHOP_CONCURRENCY,
+          agPsd: LOCAL_MOCKUP_AG_PSD_CONCURRENCY,
+        },
         pollIntervalMs: process.env.OFFOREST_LOCAL_MOCKUP_POLL_MS || '2000',
       });
     }).catch((error) => {

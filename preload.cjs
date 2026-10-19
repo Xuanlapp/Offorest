@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('offorestMockup', {
   saveLocalWorkerConfig: (config) => ipcRenderer.invoke('local-mockup-worker:save-config', config),
   startLocalWorker: () => ipcRenderer.invoke('local-mockup-worker:start'),
   stopLocalWorker: () => ipcRenderer.invoke('local-mockup-worker:stop'),
+  reloadStaleLocalWorkerJobs: (options) => ipcRenderer.invoke('local-mockup-worker:reload-stale-jobs', options),
   getLocalWorkerStatus: (query) => ipcRenderer.invoke('local-mockup-worker:status', query),
   resolveImageDataUrl: ({ sourceUrl }) =>
     ipcRenderer.invoke('mockup:resolve-image-data-url', { sourceUrl }),

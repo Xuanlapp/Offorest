@@ -51,6 +51,14 @@ export const startLocalMockupWorker = async () => getLocalWorkerBridge().startLo
 
 export const stopLocalMockupWorker = async () => getLocalWorkerBridge().stopLocalWorker()
 
+export const reloadStaleLocalMockupWorkerJobs = async (options = {}) => {
+  const bridge = getLocalWorkerBridge()
+  if (typeof bridge.reloadStaleLocalWorkerJobs !== 'function') {
+    throw new Error('Phiên bản app này chưa hỗ trợ tải lại job bị kẹt.')
+  }
+  return bridge.reloadStaleLocalWorkerJobs(options)
+}
+
 export const getLocalMockupWorkerStatus = async (query) => getLocalWorkerBridge().getLocalWorkerStatus(query)
 
 export const getDefaultMockupPsdFile = async () => {

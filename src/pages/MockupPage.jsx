@@ -7,6 +7,7 @@ import {
     pickLocalMockupWorkerStorageRoot,
     pickLocalMockupWorkerXlapProject,
     readLocalMockupWorkerOutputImage,
+    reloadStaleLocalMockupWorkerJobs,
     pickMockupPsdFile,
     renderMockupsFromPsdProgressive,
     saveLocalMockupWorkerConfig,
@@ -163,6 +164,37 @@ export default function MockupPage() {
         }
     }
 
+    const openMockupPreview = (images, initialIndex = 0) => {
+        const previewImages = Array.isArray(images)
+            ? images.filter((image) => typeof image?.src === 'string' && image.src)
+            : []
+        if (!previewImages.length) return
+
+        const safeIndex = Math.max(0, Math.min(initialIndex, previewImages.length - 1))
+        setPreviewImage({ images: previewImages, index: safeIndex })
+    }
+
+    const moveMockupPreview = (direction) => {
+        setPreviewImage((current) => {
+            if (!current?.images?.length) return current
+            const nextIndex = Math.max(0, Math.min(current.index + direction, current.images.length - 1))
+            return nextIndex === current.index ? current : { ...current, index: nextIndex }
+        })
+    }
+
+    useEffect(() => {
+        if (!previewImage) return undefined
+
+        const onKeyDown = (event) => {
+            if (event.key === 'Escape') setPreviewImage(null)
+            if (event.key === 'ArrowLeft') moveMockupPreview(-1)
+            if (event.key === 'ArrowRight') moveMockupPreview(1)
+        }
+
+        window.addEventListener('keydown', onKeyDown)
+        return () => window.removeEventListener('keydown', onKeyDown)
+    }, [previewImage])
+
     useEffect(() => {
         let isActive = true
         const loadCompletedJobImages = async () => {
@@ -213,6 +245,27 @@ export default function MockupPage() {
             setIsLocalWorkerSaving(false)
         }
     }
+
+    const handleReloadStaleLocalJobs = async () => {
+        const confirmed = window.confirm('Reload ngay toàn bộ job local đang ở trạng thái Đang làm? Các job này sẽ quay về Chờ xử lý và được worker nhận lại từ đầu.')
+        if (!confirmed) return
+
+        setIsLocalWorkerSaving(true)
+        setLocalWorkerMessage('Đang kiểm tra và tải lại các job local bị kẹt...')
+        try {
+            const result = await reloadStaleLocalMockupWorkerJobs({ force: true })
+            setLocalWorkerStatus(await getLocalMockupWorkerStatus({ status: localJobStatusFilter, search: localJobSearch, page: localJobPage }))
+            const count = Number(result?.requeuedCount || 0)
+            setLocalWorkerMessage(count
+                ? `Đã reload ngay ${count} job local đang làm. Worker đang nhận lại để chạy.`
+                : 'Không có job local nào đang làm để reload.')
+        } catch (workerError) {
+            setLocalWorkerMessage(workerError.message || 'Không thể tải lại các job bị kẹt.')
+        } finally {
+            setIsLocalWorkerSaving(false)
+        }
+    }
+
     const handleLocalWorkerToggle = async () => {
         if (!localWorkerConfig) return
         setIsLocalWorkerSaving(true)
@@ -269,7 +322,7 @@ export default function MockupPage() {
 
     const filteredData = data.filter(item => {
         const term = searchTerm.toLowerCase()
-        return item.keyword.toLowerCase().includes(term) || item.stt.toString().includes(term)
+        return item.keyword.toLowerCase().includes(term) || item.stt.toString().includes(term) || String(item.sku || '').toLowerCase().includes(term)
     })
 
     const totalPages = Math.max(1, Math.ceil(filteredData.length / pageSize))
@@ -593,6 +646,7 @@ export default function MockupPage() {
 
             const normalizedRows = rows.map((row, index) => ({
                 stt: getValueByAliases(row, ['STT']),
+                sku: getValueByAliases(row, ['SKU']),
                 keyword: getValueByAliases(row, ['KEYWORD', 'Keyword', 'TỪ KHÓA', 'TU KHOA']) || `Item ${index + 1}`,
                 sanPham: getValueByAliases(row, ['SẢN PHẨM', 'SAN PHAM', 'Product type', 'Product']),
                 imageLink: getValueByAliases(row, ['LINK ẢNH', 'Link ảnh', 'LINK ANH', 'Image', 'Image Link', 'IMAGE LINK']),
@@ -893,7 +947,7 @@ export default function MockupPage() {
                 <div className="flex flex-wrap items-center gap-2">
                     <input
                         type="text"
-                        placeholder="Search by STT or Keyword..."
+                        placeholder="Search by STT, Keyword or SKU..."
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
                         className="rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
@@ -956,9 +1010,12 @@ export default function MockupPage() {
                         <button type="button" onClick={handleLocalWorkerRestart} disabled={isLocalWorkerSaving || localWorkerStatus?.running} className="rounded-lg border border-current px-3 py-1.5 font-semibold hover:bg-white disabled:cursor-not-allowed disabled:opacity-50">
                             {localWorkerStatus?.running ? 'Worker đang chạy' : 'Khởi động lại worker'}
                         </button>
+                        <button type="button" onClick={handleReloadStaleLocalJobs} disabled={isLocalWorkerSaving} className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 font-semibold text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50">
+                            {isLocalWorkerSaving ? 'Đang tải lại...' : 'Reload job đứng im'}
+                        </button>
                     </div>
                     <label className="mt-3 block text-xs text-zinc-700">Tìm job theo STT, ID hoặc sản phẩm
-                        <input value={localJobSearch} onChange={(event) => { setLocalJobSearch(event.target.value); setLocalJobPage(1) }} placeholder="Tìm trong tất cả job..." className="mt-1 block w-full max-w-sm rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm" />
+                        <input value={localJobSearch} onChange={(event) => { setLocalJobSearch(event.target.value); setLocalJobPage(1) }} placeholder="Tìm job theo ID, STT hoặc SKU..." aria-label="Tìm job theo ID, STT hoặc SKU" className="mt-1 block w-full max-w-sm rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm" />
                     </label>
                     <div className="mt-2 flex flex-wrap gap-2 text-xs">
                         {["all","waiting","processing","completed","failed"].map((status) => <button key={status} type="button" onClick={() => { setLocalJobStatusFilter(status); setLocalJobPage(1) }} className={`rounded-full bg-zinc-100 px-2 py-1 text-zinc-800 ${localJobStatusFilter === status ? "ring-2 ring-indigo-400" : ""}`}>{status === "all" ? "Tất cả" : status === "waiting" ? "Chờ" : status === "processing" ? "Đang làm" : status === "completed" ? "Đã xong" : "Lỗi"}: {status === "all" ? Object.values(localWorkerStatus?.summary || {}).reduce((sum,value) => sum + Number(value || 0), 0) : localWorkerStatus?.summary?.[status] || 0}</button>)}
@@ -990,7 +1047,7 @@ export default function MockupPage() {
                                         {isExpanded ? (
                                             <div className="grid grid-cols-2 gap-2 border-t border-zinc-100 bg-zinc-50 p-3 md:grid-cols-3">
                                                 {outputUrls.map((url, index) => (
-                                                    <button key={url} type="button" onClick={() => setPreviewImage({ src: url, title: `${jobLabel} - Mockup ${index + 1}`, description: storedOutputUrls[index] || '' })} className="aspect-square overflow-hidden rounded-lg border border-zinc-200 bg-white p-1">
+                                                    <button key={url} type="button" onClick={() => openMockupPreview(outputUrls.map((src, imageIndex) => ({ src, title: `${jobLabel} - Mockup ${imageIndex + 1}`, description: storedOutputUrls[imageIndex] || '' })), index)} className="aspect-square overflow-hidden rounded-lg border border-zinc-200 bg-white p-1">
                                                         <img src={url} alt={`Job ${job.id} mockup ${index + 1}`} className="h-full w-full object-contain" loading="lazy" />
                                                     </button>
                                                 ))}
@@ -1151,12 +1208,10 @@ export default function MockupPage() {
                                                                     alt={`mockup-${imageIndex + 1}`}
                                                                     className="h-44 w-full cursor-zoom-in rounded-lg object-cover"
                                                                     loading="lazy"
-                                                                    onClick={() =>
-                                                                        setPreviewImage({
-                                                                            src: image.dataUrl,
-                                                                            title: image.name || `Mockup ${imageIndex + 1}`,
-                                                                        })
-                                                                    }
+                                                                    onClick={() => openMockupPreview(mockupImages.map((preview, previewIndex) => ({
+                                                                        src: preview.dataUrl,
+                                                                        title: preview.name || `Mockup ${previewIndex + 1}`,
+                                                                    })), imageIndex)}
                                                                 />
                                                             ))}
                                                         </div>
@@ -1209,26 +1264,34 @@ export default function MockupPage() {
                 </>
             )}
 
-            {previewImage ? (
+            {previewImage ? (() => {
+                const activePreviewImage = previewImage.images[previewImage.index]
+                const hasPreviousPreview = previewImage.index > 0
+                const hasNextPreview = previewImage.index < previewImage.images.length - 1
+
+                return (
                 <div
                     className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
                     onClick={() => setPreviewImage(null)}
                 >
                     <div
-                        className="relative max-h-[92vh] w-full max-w-6xl overflow-hidden rounded-2xl border border-white/10 bg-zinc-950 shadow-2xl"
+                        className="relative flex h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-zinc-950 shadow-2xl"
                         onClick={(event) => event.stopPropagation()}
                     >
-                        <div className="flex items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
+                        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
                             <div className="min-w-0">
                                 <p className="text-xs font-semibold uppercase tracking-[0.26em] text-zinc-400">
                                     Mockup Preview
                                 </p>
                                 <h3 className="mt-1 truncate text-lg font-semibold text-white">
-                                    {previewImage.title}
+                                    {activePreviewImage.title}
                                 </h3>
-                                {previewImage.description ? (
+                                {previewImage.images.length > 1 ? (
+                                    <p className="mt-1 text-xs font-medium text-sky-300">Ảnh {previewImage.index + 1} / {previewImage.images.length}</p>
+                                ) : null}
+                                {activePreviewImage.description ? (
                                     <p className="mt-1 max-h-20 overflow-hidden text-sm text-zinc-400 break-words line-clamp-3">
-                                        {previewImage.description}
+                                        {activePreviewImage.description}
                                     </p>
                                 ) : null}
                             </div>
@@ -1241,16 +1304,39 @@ export default function MockupPage() {
                             </button>
                         </div>
 
-                        <div className="flex max-h-[calc(92vh-76px)] items-center justify-center overflow-auto bg-black p-4">
+                        <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black p-5">
+                            {previewImage.images.length > 1 ? (
+                                <button
+                                    type="button"
+                                    aria-label="Xem ảnh mockup trước"
+                                    disabled={!hasPreviousPreview}
+                                    onClick={() => moveMockupPreview(-1)}
+                                    className="absolute left-5 top-1/2 z-10 -translate-y-1/2 rounded-full border border-white/20 bg-zinc-900/85 px-4 py-3 text-lg font-semibold text-white shadow-lg transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-35"
+                                >
+                                    ‹
+                                </button>
+                            ) : null}
                             <img
-                                src={previewImage.src}
-                                alt={previewImage.title}
-                                className="max-h-[calc(92vh-120px)] max-w-full rounded-xl object-contain"
+                                src={activePreviewImage.src}
+                                alt={activePreviewImage.title}
+                                className="max-h-full max-w-full rounded-xl object-contain"
                             />
+                            {previewImage.images.length > 1 ? (
+                                <button
+                                    type="button"
+                                    aria-label="Xem ảnh mockup sau"
+                                    disabled={!hasNextPreview}
+                                    onClick={() => moveMockupPreview(1)}
+                                    className="absolute right-5 top-1/2 z-10 -translate-y-1/2 rounded-full border border-white/20 bg-zinc-900/85 px-4 py-3 text-lg font-semibold text-white shadow-lg transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-35"
+                                >
+                                    ›
+                                </button>
+                            ) : null}
                         </div>
                     </div>
                 </div>
-            ) : null}
+                )
+            })() : null}
             <ListedItemsModal
                 isOpen={isListedItemsModalOpen}
                 onClose={() => setIsListedItemsModalOpen(false)}
